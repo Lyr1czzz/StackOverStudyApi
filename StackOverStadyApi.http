@@ -1,0 +1,6 @@
+@StackOverStadyApi_HostAddress = http://localhost:5153
+
+GET {{StackOverStadyApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
