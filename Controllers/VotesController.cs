@@ -23,21 +23,31 @@ namespace StackOverStadyApi.Controllers
         public class VoteInputModel
         {
             [Required]
-            public VoteType VoteType { get; set; } // Ожидаем Up или Down
+            public string VoteType { get; set; } // Ожидаем Up или Down
         }
 
         // POST /api/questions/{questionId}/vote
         [HttpPost("questions/{questionId}/vote")]
         public async Task<IActionResult> VoteForQuestion(int questionId, [FromBody] VoteInputModel model)
         {
-            return await ProcessVote(questionId, null, model.VoteType);
+            if (!Enum.TryParse<VoteType>(model.VoteType, ignoreCase: true, out var parsedVoteType))
+            {
+                return BadRequest($"Invalid vote type: {model.VoteType}");
+            }
+
+            return await ProcessVote(questionId, null, parsedVoteType);
         }
 
         // POST /api/answers/{answerId}/vote
         [HttpPost("answers/{answerId}/vote")]
         public async Task<IActionResult> VoteForAnswer(int answerId, [FromBody] VoteInputModel model)
         {
-            return await ProcessVote(null, answerId, model.VoteType);
+            if (!Enum.TryParse<VoteType>(model.VoteType, ignoreCase: true, out var parsedVoteType))
+            {
+                return BadRequest($"Invalid vote type: {model.VoteType}");
+            }
+
+            return await ProcessVote(null, answerId, parsedVoteType);
         }
 
 
