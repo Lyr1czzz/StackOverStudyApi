@@ -1,10 +1,8 @@
-﻿// QuestionsController.cs
-// ... (using, конструктор, DTO определения выше) ...
-
-using AutoMapper;
+﻿using AutoMapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
 using StackOverStadyApi.Models;
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
@@ -59,13 +57,12 @@ namespace StackOverStadyApi.Controllers
         {
             public int Id { get; set; }
             public string Title { get; set; }
-            // Можно добавить краткое содержание Content или убрать его из списка
-            // public string ContentSnippet { get; set; }
+            public string Content { get; set; } // 🔥 Убедитесь, что это поле есть
             public DateTime CreatedAt { get; set; }
             public UserInfoDto Author { get; set; }
             public List<TagDto> Tags { get; set; } = new();
-            public int AnswerCount { get; set; } // <<< Количество ответов
-            public int Rating { get; set; } // <<< Рейтинг вопроса (если есть)
+            public int AnswerCount { get; set; }
+            public int Rating { get; set; }
         }
 
         // DTO для ДЕТАЛЬНОГО отображения вопроса (включает ответы)
@@ -91,36 +88,98 @@ namespace StackOverStadyApi.Controllers
 
         public class QuestionCreateDto
         {
-            public object Tags { get; set; }
+            public List<string> Tags { get; set; }
             public string Title { get; set; }
             public string Content { get; set; }
         }
 
+
+
         // GET /api/Questions - Получение списка вопросов
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<QuestionDto>>> GetAllQuestions()
+        public async Task<ActionResult<PaginatedResult<QuestionDto>>> GetAllQuestions(
+    [FromQuery] string sort = "newest",
+    [FromQuery] string? tags = null,
+    [FromQuery] string? search = null,
+    [FromQuery] int page = 1,
+    [FromQuery] int pageSize = 10)
         {
             try
             {
-                Console.WriteLine("[DEBUG GetAllQuestions] Request received.");
-                var questions = await _context.Questions
-                    .AsNoTracking()
-                    .Include(q => q.Author) // Включаем автора
-                    .Include(q => q.Tags)   // Включаем теги
-                    .Include(q => q.Answers) // <<< Включаем ответы, чтобы посчитать их количество
-                    .OrderByDescending(q => q.CreatedAt)
+                // Шаг 1: Запрос вопросов без фильтрации
+                var query = _context.Questions.AsNoTracking();
+
+                // Шаг 2: Применяем фильтры
+                if (!string.IsNullOrEmpty(tags))
+                {
+                    var tagList = tags
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(t => t.Trim().ToLower())
+                        .ToList();
+
+                    query = query.Where(q => q.Tags.Any(t => tagList.Contains(t.Name.ToLower())));
+                }
+
+                if (!string.IsNullOrEmpty(search))
+                {
+                    query = query.Where(q => q.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
+                }
+
+                // Шаг 3: Сортировка
+                switch (sort)
+                {
+                    case "votes":
+                        query = query.OrderByDescending(q => q.Rating);
+                        break;
+                    case "active":
+                        query = query.OrderByDescending(q => q.Answers.Max(a => (DateTime?)a.CreatedAt) ?? q.CreatedAt);
+                        break;
+                    default:
+                        query = query.OrderByDescending(q => q.CreatedAt);
+                        break;
+                }
+
+                // Шаг 4: Подсчёт общего количества
+                var totalCount = await query.CountAsync();
+
+                // Шаг 5: Получаем ID вопросов для пагинации
+                var questionIds = await query
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .Select(q => q.Id)
                     .ToListAsync();
 
-                // Используем AutoMapper для преобразования в QuestionDto (который теперь включает AnswerCount)
+                // Шаг 6: Загружаем вопросы с полными связями
+                var questions = await _context.Questions
+                    .AsNoTracking()
+                    .Include(q => q.Author)
+                    .Include(q => q.Tags)
+                    .Include(q => q.Answers)
+                        .ThenInclude(a => a.Author)
+                    .Where(q => questionIds.Contains(q.Id))
+                    .ToListAsync();
+
+                // Шаг 7: Маппинг в DTO
                 var questionDtos = _mapper.Map<List<QuestionDto>>(questions);
-                Console.WriteLine($"[DEBUG GetAllQuestions] Returning {questionDtos.Count} questions.");
-                return Ok(questionDtos);
+
+                return Ok(new PaginatedResult<QuestionDto>
+                {
+                    Items = questionDtos,
+                    TotalCount = totalCount
+                });
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[ERROR GetAllQuestions]: {ex.Message}");
                 return StatusCode(500, "Ошибка сервера при получении вопросов.");
             }
+        }
+
+        // Вспомогательный класс для пагинации
+        public class PaginatedResult<T>
+        {
+            public List<T> Items { get; set; }
+            public int TotalCount { get; set; }
         }
 
         // GET /api/Questions/{id} - Получение одного вопроса с ответами
@@ -157,22 +216,56 @@ namespace StackOverStadyApi.Controllers
         [Authorize]
         public async Task<ActionResult<QuestionDto>> CreateQuestion([FromBody] QuestionCreateDto questionDto)
         {
-            // ... (код остается прежним, получает userId из токена, создает Question) ...
             Console.WriteLine("[DEBUG CreateQuestion] Request received.");
+
+            // Валидация DTO
+            if (questionDto == null || string.IsNullOrEmpty(questionDto.Title) || string.IsNullOrEmpty(questionDto.Content))
+                return BadRequest("Invalid request data.");
+
+            // Получение ID пользователя
             var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (!int.TryParse(userIdString, out var userId)) { return Unauthorized("..."); }
+            if (!int.TryParse(userIdString, out var userId))
+                return Unauthorized("User ID not found in token.");
+
             Console.WriteLine($"[DEBUG CreateQuestion] User ID from token: {userId}");
 
+            // Проверка существования пользователя
             var userExists = await _context.Users.AnyAsync(u => u.Id == userId);
-            if (!userExists) { return NotFound($"..."); }
+            if (!userExists)
+                return NotFound($"User with ID {userId} not found.");
 
             try
             {
-                // ... (обработка тегов) ...
-                var questionTags = new List<Tag>(); // Логика обработки тегов
-                
+                // Обработка тегов
+                var questionTags = new List<Tag>();
 
+                if (questionDto.Tags != null && questionDto.Tags.Count > 0)
+                {
+                    foreach (var tagName in questionDto.Tags)
+                    {
+                        if (string.IsNullOrWhiteSpace(tagName))
+                            continue; // Пропуск пустых тегов
 
+                        var normalizedTagName = tagName.Trim().ToLower(); // Нормализация названия
+
+                        // Проверка существования тега в БД
+                        var existingTag = await _context.Tags
+                            .FirstOrDefaultAsync(t => t.Name.ToLower() == normalizedTagName);
+
+                        if (existingTag != null)
+                        {
+                            questionTags.Add(existingTag);
+                        }
+                        else
+                        {
+                            var newTag = new Tag { Name = normalizedTagName };
+                            _context.Tags.Add(newTag);
+                            questionTags.Add(newTag);
+                        }
+                    }
+                }
+
+                // Создание вопроса
                 var question = new Question
                 {
                     Title = questionDto.Title,
@@ -186,19 +279,25 @@ namespace StackOverStadyApi.Controllers
                 await _context.SaveChangesAsync();
                 Console.WriteLine($"[DEBUG CreateQuestion] Question created with ID: {question.Id}");
 
-                // Загружаем автора и теги для корректного маппинга в QuestionDto
+                // Загрузка связанных данных для маппинга
                 await _context.Entry(question).Reference(q => q.Author).LoadAsync();
                 await _context.Entry(question).Collection(q => q.Tags).LoadAsync();
 
-                // Возвращаем QuestionDto (не QuestionDetailDto)
+                // Возврат DTO
                 var questionDtoResult = _mapper.Map<QuestionDto>(question);
-
                 return CreatedAtAction(nameof(GetQuestionById), new { id = question.Id }, questionDtoResult);
             }
-            catch (DbUpdateException dbEx) { /*...*/ return StatusCode(500, "..."); }
-            catch (Exception ex) { /*...*/ return StatusCode(500, "..."); }
+            catch (DbUpdateException dbEx)
+            {
+                Console.Error.WriteLine($"[ERROR CreateQuestion] Database update error: {dbEx.Message}");
+                return StatusCode(500, "Database error occurred while creating the question.");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ERROR CreateQuestion] Unexpected error: {ex.Message}");
+                return StatusCode(500, "An unexpected error occurred.");
+            }
         }
-
 
         // POST /api/Questions/{questionId}/answers - Добавление ответа к вопросу <<< НОВЫЙ МЕТОД >>>
         [HttpPost("{questionId}/answers")]
