@@ -22,6 +22,8 @@ namespace StackOverStadyApi.Controllers
             _mapper = mapper;
         }
 
+
+
         // DTO для отображения информации об авторе (уже есть)
         public class UserInfoDto
         {
@@ -30,13 +32,6 @@ namespace StackOverStadyApi.Controllers
             public string PictureUrl { get; set; }
             // Можно добавить рейтинг пользователя, если нужно в карточке
             // public int Rating { get; set; }
-        }
-
-        // DTO для отображения тега (уже есть)
-        public class TagDto
-        {
-            public int Id { get; set; }
-            public string Name { get; set; }
         }
 
         // DTO для отображения ответа
@@ -88,8 +83,17 @@ namespace StackOverStadyApi.Controllers
 
         public class QuestionCreateDto
         {
-            public List<string> Tags { get; set; }
+            // This remains List<string> as the frontend will send the names of selected tags
+            [Required]
+            [MinLength(1, ErrorMessage = "Хотя бы один тег должен быть указан.")]
+            public List<string> Tags { get; set; } = new List<string>();
+
+            [Required(ErrorMessage = "Заголовок не может быть пустым.")]
+            [StringLength(200, MinimumLength = 5, ErrorMessage = "Заголовок должен содержать от 5 до 200 символов.")]
             public string Title { get; set; }
+
+            [Required(ErrorMessage = "Содержимое вопроса не может быть пустым.")]
+            [MinLength(20, ErrorMessage = "Содержимое вопроса должно содержать не менее 20 символов.")]
             public string Content { get; set; }
         }
 
