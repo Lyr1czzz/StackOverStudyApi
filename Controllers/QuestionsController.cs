@@ -58,6 +58,7 @@ namespace StackOverStadyApi.Controllers
             public List<TagDto> Tags { get; set; } = new();
             public int AnswerCount { get; set; }
             public int Rating { get; set; }
+            public bool HasAcceptedAnswer { get; set; }
         }
 
         // DTO для ДЕТАЛЬНОГО отображения вопроса (включает ответы)
@@ -97,73 +98,113 @@ namespace StackOverStadyApi.Controllers
             public string Content { get; set; }
         }
 
+        public class VoteRequestDto // Этот DTO может быть общим или дублироваться
+        {
+            [Required]
+            public string VoteType { get; set; } // "Up" or "Down"
+        }
+
 
 
         // GET /api/Questions - Получение списка вопросов
+        // GET /api/Questions - Получение списка вопросов
         [HttpGet]
         public async Task<ActionResult<PaginatedResult<QuestionDto>>> GetAllQuestions(
-    [FromQuery] string sort = "newest",
-    [FromQuery] string? tags = null,
-    [FromQuery] string? search = null,
-    [FromQuery] int page = 1,
-    [FromQuery] int pageSize = 10)
+            [FromQuery] string sort = "newest",
+            [FromQuery] string? tags = null,
+            [FromQuery] string? search = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 10)
         {
             try
             {
-                // Шаг 1: Запрос вопросов без фильтрации
                 var query = _context.Questions.AsNoTracking();
 
-                // Шаг 2: Применяем фильтры
                 if (!string.IsNullOrEmpty(tags))
                 {
                     var tagList = tags
                         .Split(',', StringSplitOptions.RemoveEmptyEntries)
                         .Select(t => t.Trim().ToLower())
                         .ToList();
-
-                    query = query.Where(q => q.Tags.Any(t => tagList.Contains(t.Name.ToLower())));
+                    if (tagList.Any())
+                    {
+                        query = query.Where(q => q.Tags.Any(t => tagList.Contains(t.Name.ToLower())));
+                    }
                 }
 
                 if (!string.IsNullOrEmpty(search))
                 {
-                    query = query.Where(q => q.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
+                    string searchTermLower = search.ToLower(); // Преобразуем в нижний регистр
+                    query = query.Where(q => (q.Title != null && q.Title.ToLower().Contains(searchTermLower)) ||
+                                             (q.Content != null && q.Content.ToLower().Contains(searchTermLower)));
+                    // Добавил проверки на null для Title и Content на всякий случай, хотя они должны быть Required
                 }
 
-                // Шаг 3: Сортировка
+                IOrderedQueryable<Question> orderedQuery;
                 switch (sort)
                 {
                     case "votes":
-                        query = query.OrderByDescending(q => q.Rating);
+                        orderedQuery = query.OrderByDescending(q => q.Rating).ThenByDescending(q => q.CreatedAt);
                         break;
                     case "active":
-                        query = query.OrderByDescending(q => q.Answers.Max(a => (DateTime?)a.CreatedAt) ?? q.CreatedAt);
+                        orderedQuery = query.OrderByDescending(q => q.Answers.Any() ? q.Answers.Max(a => a.CreatedAt) : q.CreatedAt)
+                                            .ThenByDescending(q => q.CreatedAt);
                         break;
+                    case "newest":
                     default:
-                        query = query.OrderByDescending(q => q.CreatedAt);
+                        orderedQuery = query.OrderByDescending(q => q.CreatedAt);
                         break;
                 }
 
-                // Шаг 4: Подсчёт общего количества
-                var totalCount = await query.CountAsync();
+                var totalCount = await orderedQuery.CountAsync(); // Считаем от уже отфильтрованного и готового к сортировке запроса
 
-                // Шаг 5: Получаем ID вопросов для пагинации
-                var questionIds = await query
+                var questionIds = await orderedQuery
                     .Skip((page - 1) * pageSize)
                     .Take(pageSize)
                     .Select(q => q.Id)
                     .ToListAsync();
 
-                // Шаг 6: Загружаем вопросы с полными связями
-                var questions = await _context.Questions
+                if (!questionIds.Any())
+                {
+                    return Ok(new PaginatedResult<QuestionDto>
+                    {
+                        Items = new List<QuestionDto>(),
+                        TotalCount = totalCount
+                    });
+                }
+
+                // Загружаем вопросы, включая необходимые связанные данные для маппинга
+                var questionsQuery = _context.Questions
                     .AsNoTracking()
                     .Include(q => q.Author)
                     .Include(q => q.Tags)
-                    .Include(q => q.Answers)
-                        .ThenInclude(a => a.Author)
-                    .Where(q => questionIds.Contains(q.Id))
-                    .ToListAsync();
+                    .Include(q => q.Answers) // Необходимо для AnswerCount и HasAcceptedAnswer в маппере
+                    .Where(q => questionIds.Contains(q.Id));
 
-                // Шаг 7: Маппинг в DTO
+                List<Question> questions;
+                // ПОВТОРНО ПРИМЕНЯЕМ СОРТИРОВКУ
+                switch (sort)
+                {
+                    case "votes":
+                        questions = await questionsQuery.OrderByDescending(q => q.Rating).ThenByDescending(q => q.CreatedAt).ToListAsync();
+                        break;
+                    case "active":
+                        questions = await questionsQuery
+                                            .OrderByDescending(q => q.Answers.Any() ? q.Answers.Max(a => a.CreatedAt) : q.CreatedAt)
+                                            .ThenByDescending(q => q.CreatedAt)
+                                            .ToListAsync();
+                        break;
+                    case "newest":
+                    default:
+                        questions = await questionsQuery.OrderByDescending(q => q.CreatedAt).ToListAsync();
+                        break;
+                }
+
+                // Альтернативный способ сохранить порядок из questionIds, если он критичен (менее производительно для БД)
+                // var tempQuestions = await questionsQuery.ToListAsync();
+                // questions = tempQuestions.OrderBy(q => questionIds.IndexOf(q.Id)).ToList();
+
+
                 var questionDtos = _mapper.Map<List<QuestionDto>>(questions);
 
                 return Ok(new PaginatedResult<QuestionDto>
@@ -175,7 +216,14 @@ namespace StackOverStadyApi.Controllers
             catch (Exception ex)
             {
                 Console.WriteLine($"[ERROR GetAllQuestions]: {ex.Message}");
-                return StatusCode(500, "Ошибка сервера при получении вопросов.");
+                if (ex.InnerException != null)
+                {
+                    Console.WriteLine($"[INNER EXCEPTION GetAllQuestions]: {ex.InnerException.Message}");
+                    Console.WriteLine($"[INNER EXCEPTION STACKTRACE]: {ex.InnerException.StackTrace}");
+                }
+                Console.WriteLine($"[FULL STACK GetAllQuestions]: {ex.ToString()}");
+                // В продакшене лучше не возвращать ex.Message напрямую клиенту
+                return StatusCode(500, new { message = "Произошла ошибка на сервере при обработке запроса.", details = ex.Message });
             }
         }
 
