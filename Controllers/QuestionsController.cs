@@ -268,41 +268,34 @@ namespace StackOverStadyApi.Controllers
         [Authorize]
         public async Task<ActionResult<QuestionDto>> CreateQuestion([FromBody] QuestionCreateDto questionDto)
         {
-            Console.WriteLine("[DEBUG CreateQuestion] Request received.");
-
-            // Валидация DTO
-            if (questionDto == null || string.IsNullOrEmpty(questionDto.Title) || string.IsNullOrEmpty(questionDto.Content))
-                return BadRequest("Invalid request data.");
-
-            // Получение ID пользователя
+            // ... (проверка пользователя и DTO)
             var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (!int.TryParse(userIdString, out var userId))
                 return Unauthorized("User ID not found in token.");
 
-            Console.WriteLine($"[DEBUG CreateQuestion] User ID from token: {userId}");
-
-            // Проверка существования пользователя
-            var userExists = await _context.Users.AnyAsync(u => u.Id == userId);
-            if (!userExists)
-                return NotFound($"User with ID {userId} not found.");
+            // ... (проверка существования пользователя)
 
             try
             {
-                // Обработка тегов
                 var questionTags = new List<Tag>();
-
-                if (questionDto.Tags != null && questionDto.Tags.Count > 0)
+                if (questionDto.Tags != null && questionDto.Tags.Any())
                 {
-                    foreach (var tagName in questionDto.Tags)
+                    // Используем HashSet для быстрой проверки уникальности добавляемых имен
+                    var distinctTagNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                    foreach (var tagNameFromUser in questionDto.Tags)
                     {
-                        if (string.IsNullOrWhiteSpace(tagName))
-                            continue; // Пропуск пустых тегов
+                        if (string.IsNullOrWhiteSpace(tagNameFromUser) || tagNameFromUser.Length > 30) // Добавим проверку длины
+                            continue;
 
-                        var normalizedTagName = tagName.Trim().ToLower(); // Нормализация названия
+                        var normalizedTagName = tagNameFromUser.Trim().ToLower();
 
-                        // Проверка существования тега в БД
+                        // Пропускаем, если тег с таким именем уже был добавлен в этой сессии
+                        if (!distinctTagNames.Add(normalizedTagName))
+                            continue;
+
                         var existingTag = await _context.Tags
-                            .FirstOrDefaultAsync(t => t.Name.ToLower() == normalizedTagName);
+                            .FirstOrDefaultAsync(t => t.Name == normalizedTagName); // Сравнение уже нормализованных имен
 
                         if (existingTag != null)
                         {
@@ -310,44 +303,60 @@ namespace StackOverStadyApi.Controllers
                         }
                         else
                         {
-                            var newTag = new Tag { Name = normalizedTagName };
-                            _context.Tags.Add(newTag);
-                            questionTags.Add(newTag);
+                            var newTag = new Tag { Name = normalizedTagName }; // Сохраняем в нижнем регистре
+                            _context.Tags.Add(newTag); // EF отследит для добавления
+                            questionTags.Add(newTag);  // Добавляем новый тег в список для вопроса
                         }
                     }
                 }
 
-                // Создание вопроса
+                if (!questionTags.Any()) // Проверка, что хотя бы один тег есть после обработки
+                {
+                    // Можно вернуть ошибку, если теги обязательны и все введенные были некорректны
+                    // ModelState.AddModelError("Tags", "Необходимо указать хотя бы один корректный тег.");
+                    // return BadRequest(ModelState);
+                }
+
+
                 var question = new Question
                 {
                     Title = questionDto.Title,
                     Content = questionDto.Content,
                     AuthorId = userId,
-                    Tags = questionTags,
-                    CreatedAt = DateTime.UtcNow
+                    Tags = questionTags, // Связываем существующие и только что созданные теги
+                    CreatedAt = DateTime.UtcNow,
+                    Rating = 0
                 };
 
                 _context.Questions.Add(question);
-                await _context.SaveChangesAsync();
-                Console.WriteLine($"[DEBUG CreateQuestion] Question created with ID: {question.Id}");
+                await _context.SaveChangesAsync(); // Здесь новые теги будут сохранены в БД вместе с вопросом
 
-                // Загрузка связанных данных для маппинга
-                await _context.Entry(question).Reference(q => q.Author).LoadAsync();
-                await _context.Entry(question).Collection(q => q.Tags).LoadAsync();
+                // Перезагрузка вопроса с полными данными для DTO
+                var createdQuestion = await _context.Questions
+                    .Include(q => q.Author)
+                    .Include(q => q.Tags)
+                    .Include(q => q.Answers)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(q => q.Id == question.Id);
 
-                // Возврат DTO
-                var questionDtoResult = _mapper.Map<QuestionDto>(question);
+                if (createdQuestion == null)
+                { // Маловероятно, но для полноты
+                    return NotFound("Созданный вопрос не найден после сохранения.");
+                }
+
+                var questionDtoResult = _mapper.Map<QuestionDto>(createdQuestion);
                 return CreatedAtAction(nameof(GetQuestionById), new { id = question.Id }, questionDtoResult);
             }
+            // ... (обработка ошибок) ...
             catch (DbUpdateException dbEx)
             {
-                Console.Error.WriteLine($"[ERROR CreateQuestion] Database update error: {dbEx.Message}");
-                return StatusCode(500, "Database error occurred while creating the question.");
+                Console.Error.WriteLine($"[ERROR CreateQuestion DB]: {dbEx.InnerException?.Message ?? dbEx.Message}");
+                return StatusCode(500, new { message = "Ошибка базы данных при создании вопроса." });
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[ERROR CreateQuestion] Unexpected error: {ex.Message}");
-                return StatusCode(500, "An unexpected error occurred.");
+                Console.Error.WriteLine($"[ERROR CreateQuestion Other]: {ex.Message}");
+                return StatusCode(500, new { message = "Произошла непредвиденная ошибка." });
             }
         }
 

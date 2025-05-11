@@ -7,7 +7,6 @@ using StackOverStadyApi.Models; // For Tag
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using static StackOverStadyApi.Controllers.QuestionsController; // For TagDto
 
 namespace StackOverStadyApi.Controllers
 {
