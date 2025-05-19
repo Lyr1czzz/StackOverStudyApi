@@ -10,7 +10,7 @@ using AutoMapper.QueryableExtensions; // Для ProjectTo
 
 namespace StackOverStadyApi.Controllers
 {
-    [Route("api")]
+    [Route("api/[controller]")]
     [ApiController]
     public class CommentsController : ControllerBase
     {
@@ -49,8 +49,47 @@ namespace StackOverStadyApi.Controllers
             _mapper = mapper; // Инициализируем IMapper
         }
 
+        [HttpDelete("{commentId}")] // Это даст /api/Comments/{commentId} для DELETE запросов
+        public async Task<IActionResult> DeleteComment(int commentId)
+        {
+            var comment = await _context.Comments.FindAsync(commentId);
+
+            if (comment == null)
+            {
+                return NotFound(new { message = "Комментарий не найден." }); // Это правильный ответ 404, если комментарий ДЕЙСТВИТЕЛЬНО не найден
+            }
+
+             var currentUserIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            int.TryParse(currentUserIdString, out var currentUserId);
+            bool isAuthor = comment.UserId == currentUserId;
+            bool canModerate = User.IsInRole(UserRole.Moderator.ToString()) || User.IsInRole(UserRole.Admin.ToString());
+            if (!isAuthor && !canModerate)
+            {
+                return Forbid();
+            }
+
+
+            try
+            {
+                _context.Comments.Remove(comment);
+                await _context.SaveChangesAsync();
+                return NoContent(); // Успешное удаление
+            }
+            catch (DbUpdateException ex)
+            {
+                // Логирование ошибки
+                Console.WriteLine($"[DB ERROR DeleteComment ID: {commentId}]: {ex.ToString()}");
+                return StatusCode(500, new { message = "Ошибка базы данных при удалении комментария." });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR DeleteComment ID: {commentId}]: {ex.ToString()}");
+                return StatusCode(500, new { message = "Внутренняя ошибка сервера при удалении комментария." });
+            }
+        }
+
         // GET /api/questions/{questionId}/comments
-        [HttpGet("questions/{questionId}/comments")]
+        [HttpGet("/api/questions/{questionId}/comments")]
         public async Task<ActionResult<IEnumerable<CommentDto>>> GetQuestionComments(int questionId)
         {
             Console.WriteLine($"[GetComments] Request for Question ID: {questionId}");
@@ -65,7 +104,7 @@ namespace StackOverStadyApi.Controllers
         }
 
         // GET /api/answers/{answerId}/comments
-        [HttpGet("answers/{answerId}/comments")]
+        [HttpGet("/api/answers/{answerId}/comments")]
         public async Task<ActionResult<IEnumerable<CommentDto>>> GetAnswerComments(int answerId)
         {
             Console.WriteLine($"[GetComments] Request for Answer ID: {answerId}");
@@ -79,7 +118,7 @@ namespace StackOverStadyApi.Controllers
         }
 
         // POST /api/questions/{questionId}/comments
-        [HttpPost("questions/{questionId}/comments")]
+        [HttpPost("/api/questions/{questionId}/comments")]
         [Authorize] // Требует авторизации
         public async Task<ActionResult<CommentDto>> PostCommentToQuestion(int questionId, [FromBody] CommentCreateDto commentDto)
         {
@@ -87,7 +126,7 @@ namespace StackOverStadyApi.Controllers
         }
 
         // POST /api/answers/{answerId}/comments
-        [HttpPost("answers/{answerId}/comments")]
+        [HttpPost("/api/answers/{answerId}/comments")]
         [Authorize] // Требует авторизации
         public async Task<ActionResult<CommentDto>> PostCommentToAnswer(int answerId, [FromBody] CommentCreateDto commentDto)
         {

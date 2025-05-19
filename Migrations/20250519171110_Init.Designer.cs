@@ -12,8 +12,8 @@ using StackOverStadyApi.Models;
 namespace StackOverStadyApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20250429173524_InitialCreate")]
-    partial class InitialCreate
+    [Migration("20250519171110_Init")]
+    partial class Init
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -74,6 +74,45 @@ namespace StackOverStadyApi.Migrations
                     b.HasIndex("QuestionId");
 
                     b.ToTable("Answers");
+                });
+
+            modelBuilder.Entity("StackOverStadyApi.Models.Comment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int?>("AnswerId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("QuestionId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AnswerId");
+
+                    b.HasIndex("QuestionId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("Comments", t =>
+                        {
+                            t.HasCheckConstraint("CK_Comment_Target", "(\"QuestionId\" IS NOT NULL AND \"AnswerId\" IS NULL) OR (\"QuestionId\" IS NULL AND \"AnswerId\" IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("StackOverStadyApi.Models.Question", b =>
@@ -161,6 +200,9 @@ namespace StackOverStadyApi.Migrations
                     b.Property<DateTime?>("RefreshTokenExpiryTime")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Email")
@@ -170,6 +212,47 @@ namespace StackOverStadyApi.Migrations
                         .IsUnique();
 
                     b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("StackOverStadyApi.Models.Vote", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int?>("AnswerId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("QuestionId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("VoteType")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("VotedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AnswerId");
+
+                    b.HasIndex("QuestionId");
+
+                    b.HasIndex("UserId", "AnswerId")
+                        .IsUnique();
+
+                    b.HasIndex("UserId", "QuestionId")
+                        .IsUnique();
+
+                    b.ToTable("Votes", t =>
+                        {
+                            t.HasCheckConstraint("CK_Vote_Target", "(\"QuestionId\" IS NOT NULL AND \"AnswerId\" IS NULL) OR (\"QuestionId\" IS NULL AND \"AnswerId\" IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("QuestionTag", b =>
@@ -206,6 +289,31 @@ namespace StackOverStadyApi.Migrations
                     b.Navigation("Question");
                 });
 
+            modelBuilder.Entity("StackOverStadyApi.Models.Comment", b =>
+                {
+                    b.HasOne("StackOverStadyApi.Models.Answer", "Answer")
+                        .WithMany()
+                        .HasForeignKey("AnswerId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("StackOverStadyApi.Models.Question", "Question")
+                        .WithMany()
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("StackOverStadyApi.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Answer");
+
+                    b.Navigation("Question");
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("StackOverStadyApi.Models.Question", b =>
                 {
                     b.HasOne("StackOverStadyApi.Models.User", "Author")
@@ -215,6 +323,31 @@ namespace StackOverStadyApi.Migrations
                         .IsRequired();
 
                     b.Navigation("Author");
+                });
+
+            modelBuilder.Entity("StackOverStadyApi.Models.Vote", b =>
+                {
+                    b.HasOne("StackOverStadyApi.Models.Answer", "Answer")
+                        .WithMany()
+                        .HasForeignKey("AnswerId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("StackOverStadyApi.Models.Question", "Question")
+                        .WithMany()
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("StackOverStadyApi.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Answer");
+
+                    b.Navigation("Question");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("StackOverStadyApi.Models.Question", b =>

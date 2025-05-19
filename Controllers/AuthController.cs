@@ -138,6 +138,7 @@ namespace StackOverStadyApi.Controllers
                     userEntity = existingUser;
                     userEntity.Name = name ?? userEntity.Name; // Обновляем имя, если оно пришло
                     userEntity.PictureUrl = pictureUrl ?? userEntity.PictureUrl; // Обновляем картинку
+                    userEntity.Role = userEntity.Role;
                     // Можно обновлять и Email, если он изменился в Google, но осторожно
                     // userEntity.Email = email;
                     _context.Users.Update(userEntity);
@@ -222,7 +223,8 @@ namespace StackOverStadyApi.Controllers
                 Id = user.Id, // <<< ОБЯЗАТЕЛЬНО ВОЗВРАЩАЕМ ID
                 Name = user.Name,
                 Email = user.Email,
-                PictureUrl = user.PictureUrl
+                PictureUrl = user.PictureUrl,
+                Role = user.Role.ToString(),
                 // Можно добавить другие поля, если они нужны AuthContext
             });
         }
@@ -303,9 +305,8 @@ namespace StackOverStadyApi.Controllers
                 new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), // Дублируем в NameIdentifier для совместимости
                 new Claim(JwtRegisteredClaimNames.Name, user.Name),
                 new Claim(JwtRegisteredClaimNames.Email, user.Email),
-                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()) // Уникальный ID токена
-                // Добавьте роли или другие клеймы при необходимости
-                // new Claim(ClaimTypes.Role, "Admin")
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()), // Уникальный ID токена
+                new Claim(ClaimTypes.Role, user.Role.ToString())
             };
 
             var accessToken = new JwtSecurityToken(

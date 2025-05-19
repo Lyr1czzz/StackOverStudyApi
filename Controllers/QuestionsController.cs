@@ -104,9 +104,28 @@ namespace StackOverStadyApi.Controllers
             public string VoteType { get; set; } // "Up" or "Down"
         }
 
+        [HttpDelete("{questionId}")]
+        [Authorize(Policy = "RequireModeratorRole")]
+        public async Task<IActionResult> DeleteQuestion(int questionId)
+        {
+            var question = await _context.Questions.FindAsync(questionId); // Проще найти по ID
 
+            if (question == null)
+            {
+                return NotFound(new { message = "Вопрос не найден." });
+            }
 
-        // GET /api/Questions - Получение списка вопросов
+            // EF Core должен удалить связанные Answers, если в ApplicationDbContext
+            // для связи Question -> Answers настроено OnDelete(DeleteBehavior.Cascade).
+            // У тебя это настроено:
+            // .OnDelete(DeleteBehavior.Cascade); // Удалять ответы при удалении вопроса
+            // То же самое касается комментариев и голосов, если они каскадно связаны с ответами/вопросом.
+
+            _context.Questions.Remove(question);
+            await _context.SaveChangesAsync();
+            return NoContent();
+        }
+
         // GET /api/Questions - Получение списка вопросов
         [HttpGet]
         public async Task<ActionResult<PaginatedResult<QuestionDto>>> GetAllQuestions(

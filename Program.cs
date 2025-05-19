@@ -1,58 +1,45 @@
 using AutoMapper;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
-using Microsoft.AspNetCore.Authentication.JwtBearer; // <<< Добавлено
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;              // <<< Добавлено
-using StackOverStadyApi.Models; // Убедитесь, что пространство имен моделей правильное
-using System.Text;                                   // <<< Добавлено
+using Microsoft.IdentityModel.Tokens;
+using StackOverStadyApi.Models; // Убедитесь, что пространство имен моделей правильное и содержит UserRole
+using System.Text;
 using System.Security.Claims; // Нужно для MappingProfile
 
 var builder = WebApplication.CreateBuilder(args);
-var configuration = builder.Configuration; // Получаем конфигурацию для удобства
+var configuration = builder.Configuration;
 
 // 1. Конфигурация сервисов
 
-// Регистрация DbContext
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(configuration.GetConnectionString("DefaultConnection"))); // <<< Проверьте имя строки подключения
+    options.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
 
-// Регистрация AutoMapper
-// Убедитесь, что файл MappingProfile существует и настроен
 builder.Services.AddAutoMapper(typeof(MappingProfile));
-
-// Регистрация HttpClientFactory (уже было, но на всякий случай)
 builder.Services.AddHttpClient();
 
-// Настройка Аутентификации
 builder.Services.AddAuthentication(options =>
 {
-    // Схемы по умолчанию для API ([Authorize])
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
     options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    // Схема для процесса входа через внешних провайдеров (Google)
     options.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
 })
-    // Схема для временного хранения информации от Google
     .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
     {
-        // Можно настроить параметры куки, если нужно, но обычно для этой схемы не требуется
-        options.Cookie.Name = "ExternalLoginCookie"; // Дадим понятное имя
+        options.Cookie.Name = "ExternalLoginCookie";
     })
-    // Схема Google
     .AddGoogle(GoogleDefaults.AuthenticationScheme, options =>
     {
         options.ClientId = configuration["GoogleAuth:ClientId"] ?? throw new InvalidOperationException("Google ClientId не настроен");
         options.ClientSecret = configuration["GoogleAuth:ClientSecret"] ?? throw new InvalidOperationException("Google ClientSecret не настроен");
         options.Scope.Add("email");
         options.Scope.Add("profile");
-        options.SaveTokens = true; // Важно для получения токенов в GoogleResponse
-        options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme; // Используем куку для Sign In
+        options.SaveTokens = true;
+        options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
     })
-    // Схема JWT для защиты API
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
     {
-        // Ищем токен в куке "jwt"
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = context =>
@@ -60,87 +47,81 @@ builder.Services.AddAuthentication(options =>
                 context.Token = context.Request.Cookies["jwt"];
                 if (!string.IsNullOrEmpty(context.Token))
                 {
-                    Console.WriteLine("[JwtBearer] Token found in 'jwt' cookie.");
+                    // Console.WriteLine("[JwtBearer] Token found in 'jwt' cookie."); // Можно убрать для продакшена
                 }
-                // Опционально: можно добавить поиск в заголовке Authorization
                 return Task.CompletedTask;
             }
-            /* // Для отладки ошибок токена:
-            ,OnAuthenticationFailed = context =>
-            {
-                Console.WriteLine($"[JwtBearer] Authentication failed: {context.Exception.Message}");
-                return Task.CompletedTask;
-            }
-            ,OnChallenge = context =>
-            {
-                 Console.WriteLine($"[JwtBearer] OnChallenge: {context.Error} - {context.ErrorDescription}");
-                 return Task.CompletedTask;
-            }
-            */
         };
-
-        // Параметры валидации (должны совпадать с генерацией в AuthController)
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
             ValidateAudience = true,
-            ValidateLifetime = true, // Проверять срок жизни
+            ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
             ValidIssuer = configuration["Jwt:Issuer"] ?? throw new InvalidOperationException("Jwt:Issuer не настроен"),
             ValidAudience = configuration["Jwt:Audience"] ?? throw new InvalidOperationException("Jwt:Audience не настроен"),
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key не настроен"))),
-            ClockSkew = TimeSpan.FromMinutes(1) // Небольшой допуск времени
+            ClockSkew = TimeSpan.FromMinutes(1)
         };
     });
 
-// Настройка Авторизации (если нужны политики)
-// builder.Services.AddAuthorization();
+// --- НАСТРОЙКА АВТОРИЗАЦИИ С ПОЛИТИКАМИ ---
+builder.Services.AddAuthorization(options =>
+{
+    // Политика для действий, доступных модераторам и администраторам
+    options.AddPolicy("RequireModeratorRole", policy =>
+        policy.RequireAssertion(context => // Используем RequireAssertion для более гибкой проверки
+            context.User.IsInRole(UserRole.Moderator.ToString()) ||
+            context.User.IsInRole(UserRole.Admin.ToString())));
 
-// Добавляем контроллеры
+    // Политика для действий, доступных только администраторам (если понадобится)
+    options.AddPolicy("RequireAdminRole", policy =>
+        policy.RequireRole(UserRole.Admin.ToString()));
+
+    // Можно добавить и другие политики по необходимости
+});
+// -------------------------------------------
+
 builder.Services.AddControllers();
 
-// Настройка CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowMyOrigin", policy =>
     {
-        policy.WithOrigins("http://localhost:5173") // <<< Адрес вашего фронтенда
+        policy.WithOrigins("http://localhost:5173")
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials(); // <<< Обязательно для кук!
+              .AllowCredentials();
     });
 });
 
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
-
+// builder.Services.AddSwaggerGen(); // Если используешь Swagger, он должен быть здесь
 
 // 2. Конфигурация Pipeline приложения
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
-    app.UseDeveloperExceptionPage(); // Показывать детали ошибок в разработке
+    app.UseDeveloperExceptionPage();
+    // app.UseSwagger(); // Если используешь Swagger
+    // app.UseSwaggerUI(); // Если используешь Swagger
 }
 else
 {
-    // В продакшене можно настроить обработку ошибок по-другому
-    app.UseExceptionHandler("/Error");
+    app.UseExceptionHandler("/Error"); // Настрой кастомную страницу ошибок
     app.UseHsts();
 }
 
-app.UseHttpsRedirection(); // Перенаправлять HTTP на HTTPS
+app.UseHttpsRedirection();
+app.UseRouting();
 
-app.UseRouting(); // Включаем маршрутизацию
+app.UseCors("AllowMyOrigin");
 
-// CORS должен быть ДО UseAuthentication / UseAuthorization
-app.UseCors("AllowMyOrigin"); // Применяем политику CORS
+app.UseAuthentication(); // Важно: ДО UseAuthorization
+app.UseAuthorization();  // Включает проверку политик и [Authorize] атрибутов
 
-app.UseAuthentication(); // Включаем аутентификацию (проверяет куки/токены)
-app.UseAuthorization(); // Включаем авторизацию (проверяет [Authorize] атрибуты)
-
-app.MapControllers(); // Сопоставляем маршруты с контроллерами
+app.MapControllers();
 
 app.Run();

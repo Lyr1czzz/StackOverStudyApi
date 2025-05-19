@@ -19,6 +19,24 @@ namespace StackOverStadyApi.Controllers
             _context = context;
         }
 
+        [HttpDelete("{answerId}")]
+        [Authorize(Policy = "RequireModeratorRole")]
+        public async Task<IActionResult> DeleteAnswer(int answerId)
+        {
+            var answer = await _context.Answers.FindAsync(answerId);
+
+            if (answer == null)
+            {
+                return NotFound(new { message = "Ответ не найден." });
+            }
+            // Аналогично, EF Core должен удалить связанные комментарии и голоса,
+            // если настроено каскадное удаление в ApplicationDbContext.
+            // У тебя это настроено для Vote и Comment по отношению к AnswerId.
+            _context.Answers.Remove(answer);
+            await _context.SaveChangesAsync();
+            return NoContent();
+        }
+
         // POST /api/answers/{answerId}/accept
         [HttpPost("{answerId}/accept")]
         [Authorize] // Только авторизованные пользователи
