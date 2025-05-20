@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Query;
 using StackOverStadyApi.Models;
+using StackOverStadyApi.Services;
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 
@@ -15,11 +16,13 @@ namespace StackOverStadyApi.Controllers
     {
         private readonly ApplicationDbContext _context;
         private readonly IMapper _mapper;
+        private readonly IAchievementService _achievementService;
 
-        public QuestionsController(ApplicationDbContext context, IMapper mapper)
+        public QuestionsController(ApplicationDbContext context, IMapper mapper, IAchievementService achievementService)
         {
             _context = context;
             _mapper = mapper;
+            _achievementService = achievementService;
         }
 
 
@@ -350,6 +353,12 @@ namespace StackOverStadyApi.Controllers
                 _context.Questions.Add(question);
                 await _context.SaveChangesAsync(); // Здесь новые теги будут сохранены в БД вместе с вопросом
 
+                var questionCountForUser = await _context.Questions.CountAsync(q => q.AuthorId == userId);
+                if (questionCountForUser == 1)
+                {
+                    await _achievementService.AwardAchievementAsync(userId, "FIRST_QUESTION");
+                }
+
                 // Перезагрузка вопроса с полными данными для DTO
                 var createdQuestion = await _context.Questions
                     .Include(q => q.Author)
@@ -426,6 +435,13 @@ namespace StackOverStadyApi.Controllers
                 // 5. Сохранить ответ в БД
                 _context.Answers.Add(answer);
                 await _context.SaveChangesAsync();
+
+                var answerCountForUser = await _context.Answers.CountAsync(a => a.AuthorId == userId);
+                if (answerCountForUser == 1)
+                {
+                    await _achievementService.AwardAchievementAsync(userId, "FIRST_ANSWER");
+                }
+
                 Console.WriteLine($"[DEBUG PostAnswer] Answer created with ID: {answer.Id} for Question ID: {questionId}");
 
                 // 6. Загрузить автора для маппинга (если мапперу это нужно)

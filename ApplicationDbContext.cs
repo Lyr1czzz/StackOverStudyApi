@@ -13,9 +13,17 @@ namespace StackOverStadyApi.Models
         public DbSet<Answer> Answers { get; set; }
         public DbSet<Tag> Tags { get; set; }
 
+        public DbSet<Achievement> Achievements { get; set; }
+        public DbSet<UserAchievement> UserAchievements { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+
+            modelBuilder.Entity<Achievement>(entity =>
+            {
+                entity.HasIndex(a => a.Code).IsUnique(); // Уникальный код ачивки
+            });
 
             // Настройка уникальности GoogleId
             modelBuilder.Entity<User>()
@@ -59,7 +67,24 @@ namespace StackOverStadyApi.Models
                 .WithMany(t => t.Questions)
                 .UsingEntity(j => j.ToTable("QuestionTags")); // Явно указываем имя связующей таблицы
 
+            modelBuilder.Entity<UserAchievement>(entity =>
+            {
+                // Композитный ключ, чтобы пользователь не мог получить одну и ту же ачивку дважды
+                // Хотя проверка в коде все равно нужна перед добавлением.
+                // Но для простоты можно оставить Id как PK, а уникальность проверять в коде.
+                // Если нужен композитный ключ:
+                // entity.HasKey(ua => new { ua.UserId, ua.AchievementId });
 
+                entity.HasOne(ua => ua.User)
+                    .WithMany(u => u.UserAchievements)
+                    .HasForeignKey(ua => ua.UserId)
+                    .OnDelete(DeleteBehavior.Cascade); // Удалять записи UserAchievement при удалении пользователя
+
+                entity.HasOne(ua => ua.Achievement)
+                    .WithMany(a => a.UserAchievements)
+                    .HasForeignKey(ua => ua.AchievementId)
+                    .OnDelete(DeleteBehavior.Cascade); // Удалять записи UserAchievement при удалении ачивки (спорно, может лучше Restrict)
+            });
 
             modelBuilder.Entity<Vote>(entity =>
             {

@@ -23,5 +23,7 @@
         // Навигационные свойства
         public List<Question> Questions { get; set; } = new();
         public List<Answer> Answers { get; set; } = new();
+
+        public virtual ICollection<UserAchievement> UserAchievements { get; set; } = new List<UserAchievement>();
     }
 }

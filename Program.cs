@@ -6,7 +6,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using StackOverStadyApi.Models; // Убедитесь, что пространство имен моделей правильное и содержит UserRole
 using System.Text;
-using System.Security.Claims; // Нужно для MappingProfile
+using System.Security.Claims;
+using StackOverStadyApi.Services; // Нужно для MappingProfile
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
@@ -16,6 +17,7 @@ var configuration = builder.Configuration;
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
 
+builder.Services.AddScoped<IAchievementService, AchievementService>();
 builder.Services.AddAutoMapper(typeof(MappingProfile));
 builder.Services.AddHttpClient();
 

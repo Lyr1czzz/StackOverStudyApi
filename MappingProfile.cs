@@ -1,7 +1,8 @@
 ﻿using AutoMapper;
 using StackOverStadyApi.Models;      // Для ваших моделей: User, Tag, Answer, Question, Comment
 using StackOverStadyApi.Controllers; // Для DTO, которые вложены в контроллеры
-using System.Linq;                   // Для использования .Any()
+using System.Linq;
+using StackOverStadyApi.Dto;                   // Для использования .Any()
 
 // Рекомендуется размещать профили маппинга в отдельном неймспейсе,
 // например: namespace StackOverStadyApi.Mappings
@@ -19,7 +20,9 @@ namespace StackOverStadyApi.Models // или StackOverStadyApi.Mappings, есл�
             // Пока оставляю как есть, если они действительно разные или так задумано.
             CreateMap<User, QuestionsController.UserInfoDto>();
             CreateMap<User, CommentsController.UserInfoDto>(); // Убедись, что это не один и тот же DTO по структуре
-
+            CreateMap<Achievement, AchievementInfoDto>();
+            CreateMap<UserAchievement, UserAchievementDto>()
+                .ForMember(dest => dest.Achievement, opt => opt.MapFrom(src => src.Achievement));
 
             // --- Tag DTO ---
             // Предположим, TagDto из QuestionsController используется для QuestionDto

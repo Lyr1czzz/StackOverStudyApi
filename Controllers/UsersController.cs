@@ -1,6 +1,11 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using AutoMapper;
+using AutoMapper.QueryableExtensions;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using StackOverStadyApi.Models; // Убедитесь, что пространство имен правильное
+using StackOverStadyApi.Dto;
+using StackOverStadyApi.Models;
+using System.Security.Claims; // Убедитесь, что пространство имен правильное
 
 namespace StackOverStadyApi.Controllers
 {
@@ -9,11 +14,9 @@ namespace StackOverStadyApi.Controllers
     public class UsersController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        private readonly IMapper _mapper;
 
-        public UsersController(ApplicationDbContext context)
-        {
-            _context = context;
-        }
+        public UsersController(ApplicationDbContext context, IMapper mapper) { _context = context; _mapper = mapper; }
 
         // DTO для публичного профиля пользователя
         public class UserProfileDto
@@ -24,6 +27,46 @@ namespace StackOverStadyApi.Controllers
             public int Rating { get; set; }
             // Можно добавить другие публичные поля, например, дату регистрации, количество вопросов/ответов
             // public DateTime RegistrationDate { get; set; } // Пример
+        }
+
+        [HttpGet("{userId}/achievements")]
+        public async Task<ActionResult<IEnumerable<UserAchievementDto>>> GetUserAchievements(int userId)
+        {
+            var userExists = await _context.Users.AnyAsync(u => u.Id == userId);
+            if (!userExists)
+            {
+                return NotFound(new { message = "Пользователь не найден." });
+            }
+
+            var userAchievements = await _context.UserAchievements
+                .Where(ua => ua.UserId == userId)
+                .Include(ua => ua.Achievement) // Важно для загрузки данных ачивки
+                .OrderByDescending(ua => ua.AwardedAt)
+                .ProjectTo<UserAchievementDto>(_mapper.ConfigurationProvider) // Используем AutoMapper
+                .ToListAsync();
+
+            return Ok(userAchievements);
+        }
+
+        // Также можно сделать эндпоинт для /api/me/achievements для текущего пользователя
+        [HttpGet("me/achievements")]
+        [Authorize]
+        public async Task<ActionResult<IEnumerable<UserAchievementDto>>> GetMyAchievements()
+        {
+            var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!int.TryParse(userIdString, out var userId))
+            {
+                return Unauthorized("Не удалось определить пользователя.");
+            }
+            // Дальше логика как в GetUserAchievements, только с полученным userId
+            var userAchievements = await _context.UserAchievements
+                .Where(ua => ua.UserId == userId)
+                .Include(ua => ua.Achievement)
+                .OrderByDescending(ua => ua.AwardedAt)
+                .ProjectTo<UserAchievementDto>(_mapper.ConfigurationProvider)
+                .ToListAsync();
+
+            return Ok(userAchievements);
         }
 
         // GET: api/Users/{id}

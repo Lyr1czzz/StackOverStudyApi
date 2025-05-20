@@ -9,7 +9,8 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Authentication.Cookies; // <<< Добавлено
+using Microsoft.AspNetCore.Authentication.Cookies;
+using StackOverStadyApi.Services; // <<< Добавлено
 
 namespace StackOverStadyApi.Controllers
 {
@@ -20,12 +21,14 @@ namespace StackOverStadyApi.Controllers
         private readonly ApplicationDbContext _context;
         private readonly IConfiguration _configuration;
         private readonly HttpClient _httpClient;
+        private readonly IAchievementService _achievementService;
 
-        public AuthController(ApplicationDbContext context, IConfiguration configuration, IHttpClientFactory httpClientFactory)
+        public AuthController(ApplicationDbContext context, IConfiguration configuration, IHttpClientFactory httpClientFactory, IAchievementService achievementService)
         {
             _context = context;
             _configuration = configuration;
             _httpClient = httpClientFactory.CreateClient();
+            _achievementService = achievementService;
         }
 
         // Инициирует процесс входа через Google
@@ -129,6 +132,7 @@ namespace StackOverStadyApi.Controllers
                     };
                     _context.Users.Add(userEntity);
                     await _context.SaveChangesAsync(); // <<< Сохраняем, чтобы получить ID
+                    await _achievementService.AwardAchievementAsync(userEntity.Id, "REGISTRATION");
                     Console.WriteLine($"[DEBUG GoogleResponse] New user created with ID: {userEntity.Id}");
                 }
                 else
