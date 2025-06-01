@@ -2,12 +2,15 @@ using AutoMapper;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore; // <<< Добавь этот using для Migrate()
+using Microsoft.Extensions.DependencyInjection; // <<< Добавь этот using для CreateScope() и GetRequiredService()
+using Microsoft.Extensions.Hosting; // <<< Добавь этот using для ILogger
+using Microsoft.Extensions.Logging; // <<< Добавь этот using для ILogger
 using Microsoft.IdentityModel.Tokens;
-using StackOverStadyApi.Models; // Убедитесь, что пространство имен моделей правильное и содержит UserRole
+using StackOverStadyApi.Models; // Убедись, что пространство имен моделей правильное и содержит UserRole
 using System.Text;
 using System.Security.Claims;
-using StackOverStadyApi.Services; // Нужно для MappingProfile
+using StackOverStadyApi.Services; // Нужно для MappingProfile и IAchievementService
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
@@ -15,7 +18,17 @@ var configuration = builder.Configuration;
 // 1. Конфигурация сервисов
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(configuration.GetConnectionString("DefaultConnection"),
+        // Опционально: настройка для Npgsql для лучшей работы с миграциями и производительностью
+        npgsqlOptionsAction: sqlOptions =>
+        {
+            sqlOptions.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(30),
+                errorCodesToAdd: null);
+        }
+    )
+);
 
 builder.Services.AddScoped<IAchievementService, AchievementService>();
 builder.Services.AddAutoMapper(typeof(MappingProfile));
@@ -47,10 +60,6 @@ builder.Services.AddAuthentication(options =>
             OnMessageReceived = context =>
             {
                 context.Token = context.Request.Cookies["jwt"];
-                if (!string.IsNullOrEmpty(context.Token))
-                {
-                    // Console.WriteLine("[JwtBearer] Token found in 'jwt' cookie."); // Можно убрать для продакшена
-                }
                 return Task.CompletedTask;
             }
         };
@@ -67,62 +76,104 @@ builder.Services.AddAuthentication(options =>
         };
     });
 
-// --- НАСТРОЙКА АВТОРИЗАЦИИ С ПОЛИТИКАМИ ---
 builder.Services.AddAuthorization(options =>
 {
-    // Политика для действий, доступных модераторам и администраторам
     options.AddPolicy("RequireModeratorRole", policy =>
-        policy.RequireAssertion(context => // Используем RequireAssertion для более гибкой проверки
+        policy.RequireAssertion(context =>
             context.User.IsInRole(UserRole.Moderator.ToString()) ||
             context.User.IsInRole(UserRole.Admin.ToString())));
-
-    // Политика для действий, доступных только администраторам (если понадобится)
     options.AddPolicy("RequireAdminRole", policy =>
         policy.RequireRole(UserRole.Admin.ToString()));
-
-    // Можно добавить и другие политики по необходимости
 });
-// -------------------------------------------
 
 builder.Services.AddControllers();
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowMyOrigin", policy =>
+    options.AddPolicy("AllowMyOrigin", policy => // Используй это имя в app.UseCors()
     {
-        policy.WithOrigins("https://stack-over-study-front.vercel.app")
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials();
+        // Добавь сюда все origins, с которых разрешен доступ
+        var allowedOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? new string[0];
+        if (allowedOrigins.Any())
+        {
+            policy.WithOrigins(allowedOrigins)
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        }
+        else // Fallback для локальной разработки, если в конфиге не указано
+        {
+            policy.WithOrigins(
+                    "http://localhost:5173", // Твой локальный фронтенд
+                    "https://stack-over-study-front.vercel.app" // Твой Vercel фронтенд
+                 )
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        }
     });
 });
 
 builder.Services.AddEndpointsApiExplorer();
-// builder.Services.AddSwaggerGen(); // Если используешь Swagger, он должен быть здесь
+// builder.Services.AddSwaggerGen();
 
 // 2. Конфигурация Pipeline приложения
 
 var app = builder.Build();
 
+// --- АВТОМАТИЧЕСКОЕ ПРИМЕНЕНИЕ МИГРАЦИЙ ПРИ СТАРТЕ ---
+// Этот блок должен быть одним из первых после app = builder.Build();
+// Особенно важно, чтобы он был до того, как приложение начнет обрабатывать запросы.
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    var logger = services.GetRequiredService<ILogger<Program>>(); // Получаем логгер
+    try
+    {
+        logger.LogInformation("Attempting to get ApplicationDbContext for migration.");
+        var context = services.GetRequiredService<ApplicationDbContext>();
+
+        logger.LogInformation("Applying database migrations...");
+        context.Database.Migrate(); // Эта команда создает таблицы и применяет все ожидающие миграции
+        logger.LogInformation("Database migrations applied successfully (or no new migrations to apply).");
+
+        // Опционально: Заполнение начальными данными (Seed Data)
+        // Тебе нужно будет создать этот метод/сервис, если он нужен.
+        // Например, для заполнения таблицы Achievements.
+        // await SeedData.InitializeAsync(services); 
+        // logger.LogInformation("Seed data initialization complete (if applicable).");
+
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "An error occurred while migrating or initializing the database. Application will not start.");
+        // Важно: если миграции или сидинг падают, приложение не должно продолжать работу
+        // с некорректным состоянием БД. Выбрасываем исключение, чтобы остановить запуск.
+        // Это поможет увидеть проблему в логах Render (или другого хостинга) и исправить ее.
+        throw; // Перебрасываем исключение, чтобы остановить запуск приложения
+    }
+}
+// --------------------------------------------------
+
 if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
-    // app.UseSwagger(); // Если используешь Swagger
-    // app.UseSwaggerUI(); // Если используешь Swagger
+    // app.UseSwagger();
+    // app.UseSwaggerUI();
 }
 else
 {
-    app.UseExceptionHandler("/Error"); // Настрой кастомную страницу ошибок
+    app.UseExceptionHandler("/Error"); // Настроить страницу /Error или middleware
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+// app.UseHttpsRedirection(); // Закомментируй, если HTTPS терминируется на реверс-прокси (например, на Render)
 app.UseRouting();
 
-app.UseCors("AllowMyOrigin");
+app.UseCors("AllowMyOrigin"); // Убедись, что имя политики совпадает с тем, что задано выше
 
-app.UseAuthentication(); // Важно: ДО UseAuthorization
-app.UseAuthorization();  // Включает проверку политик и [Authorize] атрибутов
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 
