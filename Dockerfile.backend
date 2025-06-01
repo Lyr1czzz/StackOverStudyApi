@@ -1,0 +1,43 @@
+# Используем официальный образ .NET SDK для сборки
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build-env 
+# Замени 8.0 на твою версию .NET SDK, если она другая (например, 6.0, 7.0)
+WORKDIR /app
+
+# Копируем .csproj файлы и восстанавливаем зависимости отдельно для кэширования слоев
+COPY *.sln .
+COPY StackOverStadyApi/*.csproj ./StackOverStadyApi/ 
+# Если у тебя другие проекты в солюшене, скопируй и их .csproj файлы
+# Например: COPY AnotherProject/AnotherProject.csproj ./AnotherProject/
+RUN dotnet restore
+
+# Копируем весь остальной исходный код
+COPY . .
+
+# Публикуем приложение
+# Убедись, что путь к .csproj файлу твоего API проекта правильный
+WORKDIR /app/StackOverStadyApi 
+RUN dotnet publish -c Release -o /app/publish --no-restore
+
+# Используем официальный образ ASP.NET Core Runtime для запуска приложения
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+# Замени 8.0 на твою версию .NET Runtime
+WORKDIR /app
+COPY --from=build-env /app/publish .
+
+# Указываем порт, на котором будет слушать приложение внутри контейнера
+# ASP.NET Core по умолчанию слушает порт 8080 (HTTP) и 8081 (HTTPS) в контейнерах .NET 8+
+# или 80 и 443 в более старых. Проверь свою конфигурацию Kestrel.
+# Если ты используешь appsettings.json для указания URL, этот порт может быть другим.
+# Часто используют 80 для HTTP внутри контейнера.
+EXPOSE 80
+EXPOSE 443 # Если планируешь HTTPS внутри контейнера, но обычно терминируется на реверс-прокси
+
+# Переменные окружения (можно переопределить в docker-compose.yml)
+# Например, для строки подключения к PostgreSQL
+# ENV ConnectionStrings__DefaultConnection="Хост=db;Порт=5432;База данных=mydatabase;Пользователь=myuser;Пароль=mypassword;"
+# ENV ASPNETCORE_ENVIRONMENT=Production
+# ENV ASPNETCORE_URLS=http://+:80 # Чтобы Kestrel слушал на всех интерфейсах на порту 80
+
+# Команда для запуска приложения
+# Убедись, что имя DLL файла соответствует имени твоего проекта API
+ENTRYPOINT ["dotnet", "StackOverStadyApi.dll"]
