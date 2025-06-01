@@ -1,13 +1,25 @@
+# .dockerignore для ASP.NET Core проекта
+
 **/.dockerignore
 **/.env
 **/.git
 **/.gitignore
 **/.vs
 **/.vscode
+**/.idea
 **/bin
 **/obj
-**/Dockerfile
-**/Dockerfile.*
-**/docker-compose.yml
-**/docker-compose.*
-README.md
+**/Properties
+
+# Файлы, специфичные для Docker, если они в той же папке
+Dockerfile
+docker-compose.yml
+docker-compose.*.yml
+
+# Локальные пользовательские файлы
+*.user
+*.suo
+
+# Файлы логов и публикации (если они генерируются локально в папке проекта)
+*.log
+**/publish/ 

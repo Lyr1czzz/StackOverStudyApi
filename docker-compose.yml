@@ -1,0 +1,55 @@
+version: '3.8' # Используй актуальную версию
+
+services:
+  # Сервис для PostgreSQL базы данных
+  db:
+    image: postgres:15-alpine # Или другая нужная тебе версия PostgreSQL
+    container_name: stackoverstudy_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres      # Замени на своего пользователя
+      POSTGRES_PASSWORD: rootroot  # Замени на свой пароль
+      POSTGRES_DB: stackoverstudy_db        # Замени на имя твоей БД
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Для сохранения данных БД между перезапусками контейнера
+    ports:
+      - "5432:5432" # Пробрасываем порт PostgreSQL на хост (осторожно в продакшене, лучше доступ только из сети Docker)
+    networks:
+      - stackoverstudy_network
+
+  # Сервис для ASP.NET Core бэкенда
+  backend:
+    container_name: stackoverstudy_backend
+    build:
+      context: .\ # Укажи путь к папке с Dockerfile.backend
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    depends_on:
+      - db # Бэкенд запустится после базы данных
+    ports:
+      - "7295:80" # Пробрасываем порт 80 контейнера бэкенда на порт 7295 хоста (для HTTPS нужно будет настроить реверс-прокси)
+                  # Если твой API слушает на 8080 внутри контейнера, то "7295:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:80 # Указываем Kestrel слушать HTTP на порту 80 на всех интерфейсах
+      # Строка подключения к БД (использует имя сервиса 'db' из Docker Compose)
+      ConnectionStrings__DefaultConnection: "Host=db;Database=stackoverstudy_db;Username=postgres;Password=rootroot"
+      # Настройки JWT (перенеси их из appsettings.json или задай здесь)
+      Jwt__Key: "VERY_SECRET_KEY_121323132131215215511555213" # Обязательно измени!
+      Jwt__Issuer: "https://localhost:7295" # Или твой домен в продакшене
+      Jwt__Audience: "https://localhost:7295" # Или твой домен в продакшене
+      # Настройки Google Auth
+      GoogleAuth__ClientId: "1044542570866-tef2gocp9bsbic3uidbl224vci6s4n2d.apps.googleusercontent.com"
+      GoogleAuth__ClientSecret: "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"
+    volumes:
+      - ./backend_logs:/app/logs # Пример монтирования логов, если они пишутся в эту папку
+    networks:
+      - stackoverstudy_network
+# Определяем сети
+networks:
+  stackoverstudy_network:
+    driver: bridge
+
+# Определяем именованные тома для сохранения данных
+volumes:
+  postgres_data:
