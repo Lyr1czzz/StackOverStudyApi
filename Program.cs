@@ -2,24 +2,17 @@ using AutoMapper;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.EntityFrameworkCore; // <<< Добавь этот using для Migrate()
-using Microsoft.Extensions.DependencyInjection; // <<< Добавь этот using для CreateScope() и GetRequiredService()
-using Microsoft.Extensions.Hosting; // <<< Добавь этот using для ILogger
-using Microsoft.Extensions.Logging; // <<< Добавь этот using для ILogger
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using StackOverStadyApi.Models; // Убедись, что пространство имен моделей правильное и содержит UserRole
+using StackOverStadyApi.Models; 
 using System.Text;
-using System.Security.Claims;
-using StackOverStadyApi.Services; // Нужно для MappingProfile и IAchievementService
+using StackOverStadyApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 
-// 1. Конфигурация сервисов
-
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(configuration.GetConnectionString("DefaultConnection"),
-        // Опционально: настройка для Npgsql для лучшей работы с миграциями и производительностью
         npgsqlOptionsAction: sqlOptions =>
         {
             sqlOptions.EnableRetryOnFailure(
@@ -46,6 +39,7 @@ builder.Services.AddAuthentication(options =>
     })
     .AddGoogle(GoogleDefaults.AuthenticationScheme, options =>
     {
+        options.CallbackPath = "/signin-google";
         options.ClientId = configuration["GoogleAuth:ClientId"] ?? throw new InvalidOperationException("Google ClientId не настроен");
         options.ClientSecret = configuration["GoogleAuth:ClientSecret"] ?? throw new InvalidOperationException("Google ClientSecret не настроен");
         options.Scope.Add("email");
@@ -92,35 +86,21 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowMyOrigin", policy => // Используй это имя в app.UseCors()
     {
-        // Добавь сюда все origins, с которых разрешен доступ
-        var allowedOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? new string[0];
-        if (allowedOrigins.Any())
-        {
-            policy.WithOrigins(allowedOrigins)
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
-        }
-        else // Fallback для локальной разработки, если в конфиге не указано
-        {
-            policy.WithOrigins("https://stack-over-study-front.vercel.app")
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
-        }
+        policy.WithOrigins(
+            "https://stack-over-study-front.vercel.app",
+            "https://stack-over-study-api.onrender.com"
+        )
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials();
+        
     });
 });
 
 builder.Services.AddEndpointsApiExplorer();
-// builder.Services.AddSwaggerGen();
-
-// 2. Конфигурация Pipeline приложения
 
 var app = builder.Build();
 
-// --- АВТОМАТИЧЕСКОЕ ПРИМЕНЕНИЕ МИГРАЦИЙ ПРИ СТАРТЕ ---
-// Этот блок должен быть одним из первых после app = builder.Build();
-// Особенно важно, чтобы он был до того, как приложение начнет обрабатывать запросы.
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
@@ -133,21 +113,11 @@ using (var scope = app.Services.CreateScope())
         logger.LogInformation("Applying database migrations...");
         context.Database.Migrate(); // Эта команда создает таблицы и применяет все ожидающие миграции
         logger.LogInformation("Database migrations applied successfully (or no new migrations to apply).");
-
-        // Опционально: Заполнение начальными данными (Seed Data)
-        // Тебе нужно будет создать этот метод/сервис, если он нужен.
-        // Например, для заполнения таблицы Achievements.
-        // await SeedData.InitializeAsync(services); 
-        // logger.LogInformation("Seed data initialization complete (if applicable).");
-
     }
     catch (Exception ex)
     {
         logger.LogError(ex, "An error occurred while migrating or initializing the database. Application will not start.");
-        // Важно: если миграции или сидинг падают, приложение не должно продолжать работу
-        // с некорректным состоянием БД. Выбрасываем исключение, чтобы остановить запуск.
-        // Это поможет увидеть проблему в логах Render (или другого хостинга) и исправить ее.
-        throw; // Перебрасываем исключение, чтобы остановить запуск приложения
+        throw;
     }
 }
 // --------------------------------------------------

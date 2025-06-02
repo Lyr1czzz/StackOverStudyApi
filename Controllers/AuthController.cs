@@ -35,11 +35,8 @@ namespace StackOverStadyApi.Controllers
         [HttpGet("google-login")]
         public IActionResult GoogleLogin()
         {
-            // Указываем, куда Google должен вернуть пользователя ПОСЛЕ своей аутентификации
-            // Это эндпоинт нашего бэкенда, который обработает ответ Google
-            var properties = new AuthenticationProperties { RedirectUri = Url.Action(nameof(GoogleResponse)) };
-
-            // Используем схему Google для Challenge
+            var redirectUri = Url.Action(nameof(GoogleResponse), "Auth", null, Request.Scheme);
+            var properties = new AuthenticationProperties { RedirectUri = redirectUri };
             return Challenge(properties, GoogleDefaults.AuthenticationScheme);
         }
 
@@ -183,7 +180,7 @@ namespace StackOverStadyApi.Controllers
                 Console.WriteLine("[DEBUG GoogleResponse] 'refreshToken' cookie appended.");
 
                 // Редирект на страницу профиля фронтенда
-                return Redirect("http://localhost:5173/profile");
+                return Redirect("https://stack-over-study-front.vercel.app/profile");
             }
             catch (DbUpdateException dbEx)
             {
