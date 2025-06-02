@@ -85,16 +85,15 @@ builder.Services.AddControllers();
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowMyOrigin", policy => // Используй это имя в app.UseCors()
+    options.AddPolicy("AllowMyOrigin", policy =>
     {
         policy.WithOrigins(
-            "https://stack-over-study-front.vercel.app",
-            "https://stack-over-study-api.onrender.com"
-        )
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials();
-        
+                "https://stack-over-study-front.vercel.app",
+                "https://stackoverstudyapi.onrender.com"
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 });
 

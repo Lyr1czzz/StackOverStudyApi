@@ -35,18 +35,18 @@ namespace StackOverStadyApi.Controllers
         [HttpGet("google-login")]
         public IActionResult GoogleLogin()
         {
-            // Используем явное указание URI вместо Url.Action
+            Console.WriteLine("[GoogleLogin] Initiating Google login...");
             var redirectUri = "https://stackoverstudyapi.onrender.com/signin-google";
-            var properties = new AuthenticationProperties { RedirectUri = redirectUri };
+            Console.WriteLine($"[GoogleLogin] Using redirect URI: {redirectUri}");
 
+            var properties = new AuthenticationProperties { RedirectUri = redirectUri };
             return Challenge(properties, GoogleDefaults.AuthenticationScheme);
         }
 
-        // Обрабатывает ответ от Google
         [HttpGet("google-response")]
         public async Task<IActionResult> GoogleResponse()
         {
-            // Получаем результат аутентификации от схемы CookieAuthenticationDefaults.AuthenticationScheme,
+            Console.WriteLine("[GoogleResponse] Handling Google callback...");// Получаем результат аутентификации от схемы CookieAuthenticationDefaults.AuthenticationScheme,
             // которую использовал GoogleSignIn для сохранения временной информации
             var authenticateResult = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
 
