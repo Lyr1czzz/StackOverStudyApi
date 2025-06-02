@@ -35,8 +35,27 @@ namespace StackOverStadyApi.Controllers
         [HttpGet("google-login")]
         public IActionResult GoogleLogin()
         {
-            var redirectUri = Url.Action(nameof(GoogleResponse), "Auth", null, Request.Scheme);
-            var properties = new AuthenticationProperties { RedirectUri = redirectUri };
+            // Для локальной разработки и продакшена
+            string redirectUri;
+
+            if (Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development")
+            {
+                redirectUri = Url.Action(nameof(GoogleResponse), "Auth", null, Request.Scheme);
+            }
+            else
+            {
+                // Явное указание для продакшена
+                redirectUri = "https://stackoverstudyapi.onrender.com/signin-google";
+            }
+
+            Console.WriteLine($"[GoogleLogin] Using redirect URI: {redirectUri}");
+
+            var properties = new AuthenticationProperties
+            {
+                RedirectUri = redirectUri,
+                Parameters = { { "prompt", "select_account" } }
+            };
+
             return Challenge(properties, GoogleDefaults.AuthenticationScheme);
         }
 
@@ -180,6 +199,7 @@ namespace StackOverStadyApi.Controllers
                 Console.WriteLine("[DEBUG GoogleResponse] 'refreshToken' cookie appended.");
 
                 // Редирект на страницу профиля фронтенда
+                // Редирект на фронтенд
                 return Redirect("https://stack-over-study-front.vercel.app/profile");
             }
             catch (DbUpdateException dbEx)

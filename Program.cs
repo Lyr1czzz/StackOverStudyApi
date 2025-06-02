@@ -84,30 +84,46 @@ builder.Services.AddControllers();
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowMyOrigin", policy => // Используй это имя в app.UseCors()
+    options.AddPolicy("AllowMyOrigin", policy =>
     {
-        // Добавь сюда все origins, с которых разрешен доступ
-        var allowedOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? new string[0];
-        if (allowedOrigins.Any())
-        {
-            policy.WithOrigins(allowedOrigins)
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
-        }
-        else // Fallback для локальной разработки, если в конфиге не указано
-        {
-            policy.WithOrigins("https://stack-over-study-front.vercel.app")
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
-        }
+        policy.WithOrigins(
+                "https://stack-over-study-front.vercel.app",
+                "http://localhost:5173" // Для локальной разработки
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
+});
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
+                              Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
 });
 
 builder.Services.AddEndpointsApiExplorer();
 
 var app = builder.Build();
+
+var requiredVars = new[] { "GoogleAuth:ClientId", "GoogleAuth:ClientSecret", "Jwt:Key" };
+foreach (var varName in requiredVars)
+{
+    var value = configuration[varName];
+    if (string.IsNullOrEmpty(value))
+    {
+        Console.WriteLine($"ERROR: Missing required configuration: {varName}");
+        throw new Exception($"Missing configuration: {varName}");
+    }
+    Console.WriteLine($"{varName} is set");
+}
+
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
+                       Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
+});
 
 using (var scope = app.Services.CreateScope())
 {
@@ -151,5 +167,8 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
-
+app.MapGet("/", () => {
+    Console.WriteLine("Root endpoint called");
+    return "StackOverStudy API is running";
+});
 app.Run();
