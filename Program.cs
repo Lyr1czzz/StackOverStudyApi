@@ -7,7 +7,6 @@ using Microsoft.IdentityModel.Tokens;
 using StackOverStadyApi.Models; 
 using System.Text;
 using StackOverStadyApi.Services;
-using Microsoft.AspNetCore.Authentication.OAuth;
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
@@ -40,23 +39,13 @@ builder.Services.AddAuthentication(options =>
     })
     .AddGoogle(GoogleDefaults.AuthenticationScheme, options =>
     {
-        options.ClientId = configuration["GoogleAuth:ClientId"];
-        options.ClientSecret = configuration["GoogleAuth:ClientSecret"];
         options.CallbackPath = "/signin-google";
+        options.ClientId = configuration["GoogleAuth:ClientId"] ?? throw new InvalidOperationException("Google ClientId не настроен");
+        options.ClientSecret = configuration["GoogleAuth:ClientSecret"] ?? throw new InvalidOperationException("Google ClientSecret не настроен");
         options.Scope.Add("email");
         options.Scope.Add("profile");
         options.SaveTokens = true;
         options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-
-        // Добавьте обработку событий
-        options.Events = new OAuthEvents
-        {
-            OnRedirectToAuthorizationEndpoint = context =>
-            {
-                Console.WriteLine($"Redirect URI: {context.RedirectUri}");
-                return Task.CompletedTask;
-            }
-        };
     })
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
     {
@@ -95,15 +84,24 @@ builder.Services.AddControllers();
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowMyOrigin", policy =>
+    options.AddPolicy("AllowMyOrigin", policy => // Используй это имя в app.UseCors()
     {
-        policy.WithOrigins(
-                "https://stack-over-study-front.vercel.app",
-                "https://stackoverstudyapi.onrender.com"
-            )
-            .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials();
+        // Добавь сюда все origins, с которых разрешен доступ
+        var allowedOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? new string[0];
+        if (allowedOrigins.Any())
+        {
+            policy.WithOrigins(allowedOrigins)
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        }
+        else // Fallback для локальной разработки, если в конфиге не указано
+        {
+            policy.WithOrigins("https://stack-over-study-front.vercel.app")
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        }
     });
 });
 
