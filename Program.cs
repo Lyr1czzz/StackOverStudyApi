@@ -9,39 +9,24 @@ using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 using StackOverStadyApi.Models;
 using System.Text;
+using System.Security.Claims;
 using StackOverStadyApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 
 // 1. Конфигурация сервисов
-string connectionString;
-if (builder.Environment.IsProduction())
-{
-    var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
-    if (string.IsNullOrEmpty(databaseUrl))
-    {
-        throw new InvalidOperationException("DATABASE_URL environment variable is not set for Production environment.");
-    }
-    var uri = new Uri(databaseUrl);
-    var userInfo = uri.UserInfo.Split(':');
-    connectionString = $"Host={uri.Host};Port={uri.Port};Database={uri.AbsolutePath.Trim('/')};Username={userInfo[0]};Password={userInfo[1]};SSL Mode=Require;Trust Server Certificate=true;";
-    Console.WriteLine($"[DB Connection] Using DATABASE_URL for Production. Host: {uri.Host}");
-}
-else
-{
-    connectionString = configuration.GetConnectionString("DefaultConnection") ?? throw new InvalidOperationException("DefaultConnection not found in appsettings.json for Development environment.");
-    Console.WriteLine($"[DB Connection] Using DefaultConnection from appsettings.json for Development.");
-}
 
+// Используем твою оригинальную строку для DbContext, раз она работала
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(connectionString, npgsqlOptionsAction: sqlOptions =>
-    {
-        sqlOptions.EnableRetryOnFailure(
-            maxRetryCount: 5,
-            maxRetryDelay: TimeSpan.FromSeconds(30),
-            errorCodesToAdd: null);
-    }
+    options.UseNpgsql(configuration.GetConnectionString("DefaultConnection"),
+        npgsqlOptionsAction: sqlOptions =>
+        {
+            sqlOptions.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(30),
+                errorCodesToAdd: null);
+        }
     )
 );
 
@@ -58,10 +43,10 @@ builder.Services.AddAuthentication(options =>
     .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
     {
         options.Cookie.Name = "ExternalLoginCookie";
-        // Для продакшена с HTTPS важно настроить куки безопасности
+        // Настройки безопасности для кук
         options.Cookie.HttpOnly = true;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.Always; // Отправлять только по HTTPS
-        options.Cookie.SameSite = SameSiteMode.Lax; // Или None, если есть сложные сценарии с iframe/редиректами
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always; // Важно для HTTPS
+        options.Cookie.SameSite = SameSiteMode.Lax; // Или None, если это необходимо для твоего потока OAuth
     })
     .AddGoogle(GoogleDefaults.AuthenticationScheme, options =>
     {
@@ -71,8 +56,8 @@ builder.Services.AddAuthentication(options =>
         options.Scope.Add("profile");
         options.SaveTokens = true;
         options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-        // CallbackPath по умолчанию /signin-google. Убедись, что этот URI (с твоим доменом) добавлен в Google Cloud Console.
-        // https://your-api-domain.com/signin-google
+        // CallbackPath по умолчанию /signin-google.
+        // URI перенаправления в Google Console должен быть: https://ВАШ_ДОМЕН_БЭКЕНДА/signin-google
     })
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
     {
@@ -109,79 +94,65 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddControllers();
 
-const string CorsPolicyName = "AllowSpecificOrigins"; // Вынесли имя политики в константу
+const string CorsPolicyName = "AllowSpecificOrigins";
 
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(CorsPolicyName, policy =>
     {
-        var allowedOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
+        // Убедись, что Vercel URL здесь БЕЗ слеша на конце
+        string[] allowedOrigins = {
+            "http://localhost:5173",                // Для локальной разработки фронтенда
+            "https://stack-over-study-front.vercel.app"  // Для Vercel
+            // Добавь свой кастомный домен, если есть
+        };
 
-        if (allowedOrigins != null && allowedOrigins.Any())
+        var configuredOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
+        if (configuredOrigins != null && configuredOrigins.Any())
         {
-            Console.WriteLine($"[CORS] Allowed origins from configuration: {string.Join(", ", allowedOrigins)}");
-            policy.WithOrigins(allowedOrigins)
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
-        }
-        else if (builder.Environment.IsDevelopment()) // Fallback для локальной разработки, если в конфиге не указано
-        {
-            Console.WriteLine("[CORS] No AllowedOrigins in config, using fallback for Development: http://localhost:5173");
-            policy.WithOrigins("http://localhost:5173") // Убедись, что это твой локальный порт фронтенда
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
+            Console.WriteLine($"[CORS] Using origins from configuration: {string.Join(", ", configuredOrigins)}");
+            allowedOrigins = configuredOrigins;
         }
         else
         {
-            Console.WriteLine("[CORS] No AllowedOrigins configured for Production. CORS might not work as expected.");
-            // В продакшене лучше, чтобы origins были явно заданы.
-            // Можно разрешить все для отладки, но это НЕБЕЗОПАСНО:
-            // policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+            Console.WriteLine($"[CORS] Using hardcoded fallback origins: {string.Join(", ", allowedOrigins)}");
         }
+
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
     });
 });
 
 builder.Services.AddEndpointsApiExplorer();
-// builder.Services.AddSwaggerGen();
 
-// 2. Конфигурация Pipeline приложения
 var app = builder.Build();
 
-// Автоматическое применение миграций и сидинг данных (если нужно)
-try
+// Автоматическое применение миграций
+using (var scope = app.Services.CreateScope())
 {
-    using (var scope = app.Services.CreateScope())
+    var services = scope.ServiceProvider;
+    var logger = services.GetRequiredService<ILogger<Program>>();
+    try
     {
-        var services = scope.ServiceProvider;
-        var logger = services.GetRequiredService<ILogger<Program>>();
-        var dbContext = services.GetRequiredService<ApplicationDbContext>();
-
+        logger.LogInformation("Attempting to get ApplicationDbContext for migration.");
+        var context = services.GetRequiredService<ApplicationDbContext>();
         logger.LogInformation("Applying database migrations...");
-        dbContext.Database.Migrate();
+        context.Database.Migrate();
         logger.LogInformation("Database migrations applied successfully (or no new migrations to apply).");
-
-        // Пример вызова сидинга (раскомментируй и реализуй SeedData, если нужно)
-        // await SeedData.InitializeAsync(services);
-        // logger.LogInformation("Seed data initialization complete (if applicable).");
+    }
+    catch (Exception ex)
+    {
+        logger.LogCritical(ex, "An error occurred while migrating or initializing the database. Application might not start correctly or at all.");
+        // В продакшене это может быть причиной остановки приложения, если БД критична для старта
+        // throw; // Раскомментируй, если хочешь, чтобы приложение падало при ошибке миграции
     }
 }
-catch (Exception ex)
-{
-    var logger = app.Services.GetRequiredService<ILogger<Program>>();
-    logger.LogCritical(ex, "An error occurred while migrating or initializing the database. Application will shut down.");
-    // При критической ошибке с БД на старте лучше остановить приложение
-    // Environment.Exit(1); // Или просто позволить throw распространиться, если это не ловится выше
-    throw; // Перебрасываем, чтобы Render и другие хостинги зафиксировали сбой запуска
-}
-
 
 if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
-    // app.UseSwagger();
-    // app.UseSwaggerUI();
 }
 else
 {
@@ -189,23 +160,11 @@ else
     app.UseHsts();
 }
 
-// HTTPS Redirection:
-// На Render HTTPS обычно терминируется на их балансировщике нагрузки.
-// Если ты уверен, что перед твоим приложением всегда будет HTTPS-терминация,
-// UseHttpsRedirection может быть не нужен или даже вызывать проблемы с редиректами.
-// Однако, если ты не уверен или хочешь дополнительный слой, оставь его.
-// Для Render может быть полезно настроить Forwarded Headers, если они еще не настроены по умолчанию.
-/*
-app.UseForwardedHeaders(new ForwardedHeadersOptions
-{
-    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
-});
-*/
-app.UseHttpsRedirection();
-
+// HTTPS Redirection: если Render терминирует HTTPS, это может быть не нужно.
+// app.UseHttpsRedirection(); 
 app.UseRouting();
 
-app.UseCors(CorsPolicyName); // Используем имя политики
+app.UseCors(CorsPolicyName);
 
 app.UseAuthentication();
 app.UseAuthorization();
