@@ -35,8 +35,10 @@ namespace StackOverStadyApi.Controllers
         [HttpGet("google-login")]
         public IActionResult GoogleLogin()
         {
-            var redirectUri = Url.Action(nameof(GoogleResponse), "Auth", null, Request.Scheme);
+            // Используем явное указание URI вместо Url.Action
+            var redirectUri = "https://stackoverstudyapi.onrender.com/signin-google";
             var properties = new AuthenticationProperties { RedirectUri = redirectUri };
+
             return Challenge(properties, GoogleDefaults.AuthenticationScheme);
         }
 

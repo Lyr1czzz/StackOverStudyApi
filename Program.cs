@@ -39,9 +39,10 @@ builder.Services.AddAuthentication(options =>
     })
     .AddGoogle(GoogleDefaults.AuthenticationScheme, options =>
     {
-        options.CallbackPath = "/signin-google";
-        options.ClientId = configuration["GoogleAuth:ClientId"] ?? throw new InvalidOperationException("Google ClientId не настроен");
-        options.ClientSecret = configuration["GoogleAuth:ClientSecret"] ?? throw new InvalidOperationException("Google ClientSecret не настроен");
+        options.ClientId = configuration["GoogleAuth:ClientId"];
+        options.ClientSecret = configuration["GoogleAuth:ClientSecret"];
+        options.CallbackPath = "/signin-google"; // явное указание
+        options.AuthorizationEndpoint += "?prompt=consent"; // ƒобавьте эту строку
         options.Scope.Add("email");
         options.Scope.Add("profile");
         options.SaveTokens = true;
