@@ -39,7 +39,13 @@ namespace StackOverStadyApi.Controllers
             var redirectUri = "https://stackoverstudyapi.onrender.com/signin-google";
             Console.WriteLine($"[GoogleLogin] Using redirect URI: {redirectUri}");
 
-            var properties = new AuthenticationProperties { RedirectUri = redirectUri };
+            var properties = new AuthenticationProperties
+            {
+                RedirectUri = redirectUri,
+                // Установите prompt здесь
+                Parameters = { { "prompt", "select_account" } }
+            };
+
             return Challenge(properties, GoogleDefaults.AuthenticationScheme);
         }
 

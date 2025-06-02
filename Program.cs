@@ -7,6 +7,7 @@ using Microsoft.IdentityModel.Tokens;
 using StackOverStadyApi.Models; 
 using System.Text;
 using StackOverStadyApi.Services;
+using Microsoft.AspNetCore.Authentication.OAuth;
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
@@ -41,12 +42,21 @@ builder.Services.AddAuthentication(options =>
     {
         options.ClientId = configuration["GoogleAuth:ClientId"];
         options.ClientSecret = configuration["GoogleAuth:ClientSecret"];
-        options.CallbackPath = "/signin-google"; // Явное указание
-        options.AuthorizationEndpoint += "?prompt=consent"; // Добавьте эту строку
+        options.CallbackPath = "/signin-google";
         options.Scope.Add("email");
         options.Scope.Add("profile");
         options.SaveTokens = true;
         options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+
+        // Добавьте обработку событий
+        options.Events = new OAuthEvents
+        {
+            OnRedirectToAuthorizationEndpoint = context =>
+            {
+                Console.WriteLine($"Redirect URI: {context.RedirectUri}");
+                return Task.CompletedTask;
+            }
+        };
     })
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
     {
