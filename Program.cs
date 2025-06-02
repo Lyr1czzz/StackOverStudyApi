@@ -36,6 +36,8 @@ builder.Services.AddAuthentication(options =>
     .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
     {
         options.Cookie.Name = "ExternalLoginCookie";
+        options.Cookie.SameSite = SameSiteMode.None; // Добавьте эту строку
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always; // И эту
     })
     .AddGoogle(GoogleDefaults.AuthenticationScheme, options =>
     {
@@ -88,11 +90,12 @@ builder.Services.AddCors(options =>
     {
         policy.WithOrigins(
                 "https://stack-over-study-front.vercel.app",
-                "http://localhost:5173" // Для локальной разработки
+                "https://stackoverstudyapi.onrender.com"
             )
             .AllowAnyHeader()
             .AllowAnyMethod()
-            .AllowCredentials();
+            .AllowCredentials()
+            .SetIsOriginAllowedToAllowWildcardSubdomains();
     });
 });
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
@@ -171,4 +174,9 @@ app.MapGet("/", () => {
     Console.WriteLine("Root endpoint called");
     return "StackOverStudy API is running";
 });
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    Console.WriteLine($"Pending migrations: {string.Join(", ", db.Database.GetPendingMigrations())}");
+}
 app.Run();
