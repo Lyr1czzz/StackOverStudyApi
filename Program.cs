@@ -2,24 +2,24 @@ using AutoMapper;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using Microsoft.EntityFrameworkCore; // <<< Добавь этот using для Migrate()
+using Microsoft.Extensions.DependencyInjection; // <<< Добавь этот using для CreateScope() и GetRequiredService()
+using Microsoft.Extensions.Hosting; // <<< Добавь этот using для ILogger
+using Microsoft.Extensions.Logging; // <<< Добавь этот using для ILogger
 using Microsoft.IdentityModel.Tokens;
-using StackOverStadyApi.Models;
+using StackOverStadyApi.Models; // Убедись, что пространство имен моделей правильное и содержит UserRole
 using System.Text;
 using System.Security.Claims;
-using StackOverStadyApi.Services;
+using StackOverStadyApi.Services; // Нужно для MappingProfile и IAchievementService
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 
 // 1. Конфигурация сервисов
 
-// Используем твою оригинальную строку для DbContext, раз она работала
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(configuration.GetConnectionString("DefaultConnection"),
+        // Опционально: настройка для Npgsql для лучшей работы с миграциями и производительностью
         npgsqlOptionsAction: sqlOptions =>
         {
             sqlOptions.EnableRetryOnFailure(
@@ -43,21 +43,15 @@ builder.Services.AddAuthentication(options =>
     .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
     {
         options.Cookie.Name = "ExternalLoginCookie";
-        // Настройки безопасности для кук
-        options.Cookie.HttpOnly = true;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.Always; // Важно для HTTPS
-        options.Cookie.SameSite = SameSiteMode.Lax; // Или None, если это необходимо для твоего потока OAuth
     })
     .AddGoogle(GoogleDefaults.AuthenticationScheme, options =>
     {
-        options.ClientId = configuration["GoogleAuth:ClientId"] ?? throw new InvalidOperationException("GoogleAuth:ClientId не настроен");
-        options.ClientSecret = configuration["GoogleAuth:ClientSecret"] ?? throw new InvalidOperationException("GoogleAuth:ClientSecret не настроен");
+        options.ClientId = configuration["GoogleAuth:ClientId"] ?? throw new InvalidOperationException("Google ClientId не настроен");
+        options.ClientSecret = configuration["GoogleAuth:ClientSecret"] ?? throw new InvalidOperationException("Google ClientSecret не настроен");
         options.Scope.Add("email");
         options.Scope.Add("profile");
         options.SaveTokens = true;
         options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-        // CallbackPath по умолчанию /signin-google.
-        // URI перенаправления в Google Console должен быть: https://ВАШ_ДОМЕН_БЭКЕНДА/signin-google
     })
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
     {
@@ -94,77 +88,86 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddControllers();
 
-const string CorsPolicyName = "AllowSpecificOrigins";
-
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy(CorsPolicyName, policy =>
+    options.AddPolicy("AllowMyOrigin", policy => // Используй это имя в app.UseCors()
     {
-        // Убедись, что Vercel URL здесь БЕЗ слеша на конце
-        string[] allowedOrigins = {
-            "http://localhost:5173",                // Для локальной разработки фронтенда
-            "https://stack-over-study-front.vercel.app"  // Для Vercel
-            // Добавь свой кастомный домен, если есть
-        };
-
-        var configuredOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
-        if (configuredOrigins != null && configuredOrigins.Any())
+        // Добавь сюда все origins, с которых разрешен доступ
+        var allowedOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? new string[0];
+        if (allowedOrigins.Any())
         {
-            Console.WriteLine($"[CORS] Using origins from configuration: {string.Join(", ", configuredOrigins)}");
-            allowedOrigins = configuredOrigins;
+            policy.WithOrigins(allowedOrigins)
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
         }
-        else
+        else // Fallback для локальной разработки, если в конфиге не указано
         {
-            Console.WriteLine($"[CORS] Using hardcoded fallback origins: {string.Join(", ", allowedOrigins)}");
+            policy.WithOrigins("https://stack-over-study-front.vercel.app")
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
         }
-
-        policy.WithOrigins(allowedOrigins)
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials();
     });
 });
 
 builder.Services.AddEndpointsApiExplorer();
+// builder.Services.AddSwaggerGen();
+
+// 2. Конфигурация Pipeline приложения
 
 var app = builder.Build();
 
-// Автоматическое применение миграций
+// --- АВТОМАТИЧЕСКОЕ ПРИМЕНЕНИЕ МИГРАЦИЙ ПРИ СТАРТЕ ---
+// Этот блок должен быть одним из первых после app = builder.Build();
+// Особенно важно, чтобы он был до того, как приложение начнет обрабатывать запросы.
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
-    var logger = services.GetRequiredService<ILogger<Program>>();
+    var logger = services.GetRequiredService<ILogger<Program>>(); // Получаем логгер
     try
     {
         logger.LogInformation("Attempting to get ApplicationDbContext for migration.");
         var context = services.GetRequiredService<ApplicationDbContext>();
+
         logger.LogInformation("Applying database migrations...");
-        context.Database.Migrate();
+        context.Database.Migrate(); // Эта команда создает таблицы и применяет все ожидающие миграции
         logger.LogInformation("Database migrations applied successfully (or no new migrations to apply).");
+
+        // Опционально: Заполнение начальными данными (Seed Data)
+        // Тебе нужно будет создать этот метод/сервис, если он нужен.
+        // Например, для заполнения таблицы Achievements.
+        // await SeedData.InitializeAsync(services); 
+        // logger.LogInformation("Seed data initialization complete (if applicable).");
+
     }
     catch (Exception ex)
     {
-        logger.LogCritical(ex, "An error occurred while migrating or initializing the database. Application might not start correctly or at all.");
-        // В продакшене это может быть причиной остановки приложения, если БД критична для старта
-        // throw; // Раскомментируй, если хочешь, чтобы приложение падало при ошибке миграции
+        logger.LogError(ex, "An error occurred while migrating or initializing the database. Application will not start.");
+        // Важно: если миграции или сидинг падают, приложение не должно продолжать работу
+        // с некорректным состоянием БД. Выбрасываем исключение, чтобы остановить запуск.
+        // Это поможет увидеть проблему в логах Render (или другого хостинга) и исправить ее.
+        throw; // Перебрасываем исключение, чтобы остановить запуск приложения
     }
 }
+// --------------------------------------------------
 
 if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
+    // app.UseSwagger();
+    // app.UseSwaggerUI();
 }
 else
 {
-    app.UseExceptionHandler("/Error");
+    app.UseExceptionHandler("/Error"); // Настроить страницу /Error или middleware
     app.UseHsts();
 }
 
-// HTTPS Redirection: если Render терминирует HTTPS, это может быть не нужно.
-// app.UseHttpsRedirection(); 
+// app.UseHttpsRedirection(); // Закомментируй, если HTTPS терминируется на реверс-прокси (например, на Render)
 app.UseRouting();
 
-app.UseCors(CorsPolicyName);
+app.UseCors("AllowMyOrigin"); // Убедись, что имя политики совпадает с тем, что задано выше
 
 app.UseAuthentication();
 app.UseAuthorization();
