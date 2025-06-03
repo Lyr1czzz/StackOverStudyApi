@@ -22,7 +22,7 @@ FROM mcr.microsoft.com/dotnet/aspnet:9.0
 WORKDIR /app
 COPY --from=build-env /app/publish .
 
-EXPOSE 7295
+EXPOSE 8080
 
 # Замени StackOverStadyApi.dll на имя твоей DLL
 ENTRYPOINT ["dotnet", "StackOverStadyApi.dll"]
