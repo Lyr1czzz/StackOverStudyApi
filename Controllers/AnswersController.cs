@@ -86,46 +86,58 @@ namespace StackOverStadyApi.Controllers
                     questionId = answerToAccept.QuestionId
                 });
             }
+            // 5. Логика принятия ответа (с поддержкой стратегии повторов)
+            var executionStrategy = _context.Database.CreateExecutionStrategy();
 
-            // 5. Логика принятия ответа (с транзакцией для атомарности)
-            using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
-                // Находим все другие ответы на этот вопрос, которые УЖЕ могли быть приняты
-                var questionId = answerToAccept.QuestionId;
-                var otherAcceptedAnswers = await _context.Answers
-                    .Where(a => a.QuestionId == questionId && a.Id != answerToAccept.Id && a.IsAccepted)
-                    .ToListAsync();
-
-                // Снимаем флаг IsAccepted у других ранее принятых ответов (если такие были)
-                // Это гарантирует, что только один ответ на вопрос может быть принят одновременно.
-                foreach (var otherAnswer in otherAcceptedAnswers)
+                await executionStrategy.ExecuteAsync(async () =>
                 {
-                    otherAnswer.IsAccepted = false;
-                }
+                    await using var transaction = await _context.Database.BeginTransactionAsync();
+                    try
+                    {
+                        // Перезагружаем данные внутри блока (важно для повторов!)
+                        var answer = await _context.Answers
+                            .Include(a => a.Question)
+                            .FirstAsync(a => a.Id == answerId); // Используем First для исключения при отсутствии
 
-                // Устанавливаем IsAccepted = true для текущего ответа
-                answerToAccept.IsAccepted = true;
+                        var questionId = answer.QuestionId;
+                        var otherAcceptedAnswers = await _context.Answers
+                            .Where(a => a.QuestionId == questionId &&
+                                        a.Id != answerId &&
+                                        a.IsAccepted)
+                            .ToListAsync();
 
-                await _context.SaveChangesAsync(); // Сохраняем все изменения
-                await transaction.CommitAsync();   // Фиксируем транзакцию
+                        foreach (var otherAnswer in otherAcceptedAnswers)
+                        {
+                            otherAnswer.IsAccepted = false;
+                        }
+
+                        answer.IsAccepted = true;
+                        await _context.SaveChangesAsync();
+                        await transaction.CommitAsync();
+                    }
+                    catch
+                    {
+                        await transaction.RollbackAsync();
+                        throw;
+                    }
+                });
 
                 return Ok(new
                 {
                     message = "Ответ успешно принят.",
-                    acceptedAnswerId = answerToAccept.Id, // Возвращаем ID принятого ответа
-                    questionId = answerToAccept.QuestionId // И ID вопроса для удобства клиента
+                    acceptedAnswerId = answerToAccept.Id,
+                    questionId = answerToAccept.QuestionId
                 });
             }
             catch (DbUpdateException ex)
             {
-                await transaction.RollbackAsync();
                 Console.WriteLine($"[DB ERROR AcceptAnswer]: {ex.ToString()}");
                 return StatusCode(500, new { message = "Ошибка базы данных при принятии ответа." });
             }
             catch (Exception ex)
             {
-                await transaction.RollbackAsync();
                 Console.WriteLine($"[ERROR AcceptAnswer]: {ex.ToString()}");
                 return StatusCode(500, new { message = ex.Message });
             }
