@@ -127,7 +127,7 @@ namespace StackOverStadyApi.Controllers
             {
                 await transaction.RollbackAsync();
                 Console.WriteLine($"[ERROR AcceptAnswer]: {ex.ToString()}");
-                return StatusCode(500, new { message = ex.Data.Values.ToString() });
+                return StatusCode(500, new { message = ex.Message });
             }
         }
     }
