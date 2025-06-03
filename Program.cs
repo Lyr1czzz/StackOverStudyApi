@@ -1,16 +1,24 @@
-using AutoMapper;
+﻿using AutoMapper;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides; // Для ForwardedHeaders
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging; // Для ILogger
 using Microsoft.IdentityModel.Tokens;
-using StackOverStadyApi.Models; 
+using StackOverStadyApi.Models; // Для ApplicationDbContext, UserRole, MappingProfile
+using StackOverStadyApi.Services; // Для IAchievementService, AchievementService
+using System;
+using System.Linq;
 using System.Text;
-using StackOverStadyApi.Services;
+using System.Threading.Tasks; // Для Task.CompletedTask
 
 var builder = WebApplication.CreateBuilder(args);
-var configuration = builder.Configuration;
+var configuration = builder.Configuration; // Получаем конфигурацию для удобства
 
+// 1. Конфигурация сервисов (Services Configuration)
+
+// Регистрация DbContext с политикой повторных попыток
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(configuration.GetConnectionString("DefaultConnection"),
         npgsqlOptionsAction: sqlOptions =>
@@ -18,36 +26,43 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
             sqlOptions.EnableRetryOnFailure(
                 maxRetryCount: 5,
                 maxRetryDelay: TimeSpan.FromSeconds(30),
-                errorCodesToAdd: null);
+                errorCodesToAdd: null); // null означает стандартный список ошибок PostgreSQL для повтора
         }
     )
 );
 
+// Регистрация сервисов приложения
 builder.Services.AddScoped<IAchievementService, AchievementService>();
-builder.Services.AddAutoMapper(typeof(MappingProfile));
+
+// Регистрация AutoMapper
+builder.Services.AddAutoMapper(typeof(MappingProfile)); // Предполагается, что MappingProfile в том же assembly
+
+// Регистрация HttpClientFactory (полезно для управляемых HTTP-клиентов, если будешь использовать)
 builder.Services.AddHttpClient();
 
+// Настройка Аутентификации
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
     options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+    options.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme; // Для внешних провайдеров
 })
     .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
     {
         options.Cookie.Name = "ExternalLoginCookie";
-        options.Cookie.SameSite = SameSiteMode.None; // �������� ��� ������
-        options.Cookie.SecurePolicy = CookieSecurePolicy.Always; // � ���
+        // Для работы с куками через HTTPS и межсайтовыми запросами (если OAuth редиректы идут на другой сайт)
+        options.Cookie.SameSite = SameSiteMode.None;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     })
     .AddGoogle(GoogleDefaults.AuthenticationScheme, options =>
     {
-        options.CallbackPath = "/signin-google";
-        options.ClientId = configuration["GoogleAuth:ClientId"] ?? throw new InvalidOperationException("Google ClientId �� ��������");
-        options.ClientSecret = configuration["GoogleAuth:ClientSecret"] ?? throw new InvalidOperationException("Google ClientSecret �� ��������");
+        options.ClientId = configuration["GoogleAuth:ClientId"] ?? throw new InvalidOperationException("Google ClientId не настроен в конфигурации.");
+        options.ClientSecret = configuration["GoogleAuth:ClientSecret"] ?? throw new InvalidOperationException("Google ClientSecret не настроен в конфигурации.");
         options.Scope.Add("email");
         options.Scope.Add("profile");
-        options.SaveTokens = true;
-        options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+        options.SaveTokens = true; // Важно для доступа к токенам Google после аутентификации
+        options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme; // Указываем схему для временной куки
+        // options.CallbackPath = "/signin-google"; // Оставь, если ты его явно настраивал в Google Cloud Console
     })
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
     {
@@ -55,9 +70,11 @@ builder.Services.AddAuthentication(options =>
         {
             OnMessageReceived = context =>
             {
-                context.Token = context.Request.Cookies["jwt"];
+                context.Token = context.Request.Cookies["jwt"]; // Читаем JWT из куки "jwt"
                 return Task.CompletedTask;
             }
+            // Можно добавить OnAuthenticationFailed для отладки, если есть проблемы с валидацией токена
+            // , OnAuthenticationFailed = context => { Console.WriteLine($"JWT Auth Failed: {context.Exception.Message}"); return Task.CompletedTask; }
         };
         options.TokenValidationParameters = new TokenValidationParameters
         {
@@ -65,118 +82,138 @@ builder.Services.AddAuthentication(options =>
             ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = configuration["Jwt:Issuer"] ?? throw new InvalidOperationException("Jwt:Issuer �� ��������"),
-            ValidAudience = configuration["Jwt:Audience"] ?? throw new InvalidOperationException("Jwt:Audience �� ��������"),
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key �� ��������"))),
-            ClockSkew = TimeSpan.FromMinutes(1)
+            ValidIssuer = configuration["Jwt:Issuer"] ?? throw new InvalidOperationException("Jwt:Issuer не настроен в конфигурации."),
+            ValidAudience = configuration["Jwt:Audience"] ?? throw new InvalidOperationException("Jwt:Audience не настроен в конфигурации."),
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key (длинный секретный ключ) не настроен в конфигурации."))),
+            ClockSkew = TimeSpan.FromMinutes(1) // Допустимое расхождение времени
         };
     });
 
+// Настройка Авторизации с политиками
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("RequireModeratorRole", policy =>
         policy.RequireAssertion(context =>
             context.User.IsInRole(UserRole.Moderator.ToString()) ||
             context.User.IsInRole(UserRole.Admin.ToString())));
+
     options.AddPolicy("RequireAdminRole", policy =>
         policy.RequireRole(UserRole.Admin.ToString()));
 });
 
+// Добавляем контроллеры
 builder.Services.AddControllers();
 
+// Настройка CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowMyOrigin", policy =>
+    options.AddPolicy("AllowSpecificOrigins", policy => // Используй одно и то же имя политики везде
     {
-        policy.WithOrigins(
-                "https://stack-over-study-front.vercel.app",
-                "https://stackoverstudyapi.onrender.com"
-            )
-            .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials()
-            .SetIsOriginAllowedToAllowWildcardSubdomains();
+        // Укажи ТОЧНЫЕ URL твоего фронтенда. Без слеша в конце.
+        var allowedOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ??
+                             new[] {
+                                 "http://localhost:5173", // Для локальной разработки Vite
+                                 "https://stack-over-study-front.vercel.app" // Твой Vercel URL
+                                 // Добавь другие, если нужно (например, кастомный домен)
+                             };
+
+        Console.WriteLine($"[CORS] Allowed Origins: {string.Join(", ", allowedOrigins)}");
+
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials(); // Обязательно для передачи кук (включая JWT в куке)
     });
 });
+
+// Настройка для работы за реверс-прокси (как Render)
+// Это поможет приложению правильно определять схему (http/https) и IP клиента
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
-    options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
-                              Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
-    options.KnownNetworks.Clear();
-    options.KnownProxies.Clear();
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // Важно: НЕ очищай KnownNetworks и KnownProxies, если ты не полностью контролируешь всю цепочку прокси.
+    // Render и другие PaaS обычно настраивают это корректно.
+    // Если после этого все еще проблемы с редиректами HTTPS, тогда можно рассмотреть очистку.
 });
 
 builder.Services.AddEndpointsApiExplorer();
+// builder.Services.AddSwaggerGen(); // Раскомментируй, если используешь Swagger
+
+// 2. Конфигурация Pipeline приложения (HTTP request pipeline)
 
 var app = builder.Build();
 
-var requiredVars = new[] { "GoogleAuth:ClientId", "GoogleAuth:ClientSecret", "Jwt:Key" };
-foreach (var varName in requiredVars)
-{
-    var value = configuration[varName];
-    if (string.IsNullOrEmpty(value))
-    {
-        Console.WriteLine($"ERROR: Missing required configuration: {varName}");
-        throw new Exception($"Missing configuration: {varName}");
-    }
-    Console.WriteLine($"{varName} is set");
-}
-
-app.UseForwardedHeaders(new ForwardedHeadersOptions
-{
-    ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
-                       Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
-});
-
+// Применение миграций и начальное заполнение данными (если нужно)
+// Делать это здесь удобно для Docker-окружений или при первом запуске.
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
-    var logger = services.GetRequiredService<ILogger<Program>>(); // �������� ������
+    var logger = services.GetRequiredService<ILogger<Program>>();
     try
     {
         logger.LogInformation("Attempting to get ApplicationDbContext for migration.");
-        var context = services.GetRequiredService<ApplicationDbContext>();
+        var dbContext = services.GetRequiredService<ApplicationDbContext>();
 
         logger.LogInformation("Applying database migrations...");
-        context.Database.Migrate(); // ��� ������� ������� ������� � ��������� ��� ��������� ��������
-        logger.LogInformation("Database migrations applied successfully (or no new migrations to apply).");
+        // Проверяем, есть ли ожидающие миграции перед их применением
+        if (dbContext.Database.GetPendingMigrations().Any())
+        {
+            dbContext.Database.Migrate();
+            logger.LogInformation("Database migrations applied successfully.");
+        }
+        else
+        {
+            logger.LogInformation("No pending migrations to apply.");
+        }
+
+        // Здесь можно добавить вызов сервиса для Seed Data, если он у тебя есть
+        // Например: SeedData.Initialize(services);
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "An error occurred while migrating or initializing the database. Application will not start.");
+        logger.LogCritical(ex, "An error occurred while migrating or initializing the database. Application will terminate.");
+        // Важно: если БД не готова, приложение может не работать корректно.
+        // Можно либо остановить приложение, либо продолжить с логированием критической ошибки.
+        // Для простоты, пока оставляем throw, чтобы увидеть проблему при запуске.
         throw;
     }
 }
-// --------------------------------------------------
 
+// Конфигурация HTTP пайплайна
 if (app.Environment.IsDevelopment())
 {
-    app.UseDeveloperExceptionPage();
+    app.UseDeveloperExceptionPage(); // Более детальные ошибки для разработки
     // app.UseSwagger();
     // app.UseSwaggerUI();
 }
 else
 {
-    app.UseExceptionHandler("/Error"); // ��������� �������� /Error ��� middleware
-    app.UseHsts();
+    // Для продакшена:
+    app.UseExceptionHandler("/Error"); // Нужна реализация /Error эндпоинта или middleware
+    app.UseHsts(); // Добавляет заголовок Strict-Transport-Security
 }
 
-// app.UseHttpsRedirection(); // �������������, ���� HTTPS ������������� �� ������-������ (��������, �� Render)
-app.UseRouting();
+// Используем ForwardedHeaders для корректной работы за реверс-прокси
+// Это должно быть одним из первых middleware, особенно перед UseHttpsRedirection, если он используется.
+app.UseForwardedHeaders();
 
-app.UseCors("AllowMyOrigin"); // �������, ��� ��� �������� ��������� � ���, ��� ������ ����
+// HTTPS Redirection: Render обычно предоставляет HTTPS, поэтому это может быть не нужно
+// или даже вызывать проблемы с циклами редиректа, если прокси уже терминирует SSL.
+// Если HTTPS терминируется на уровне Render, эту строку лучше закомментировать.
+// Если ты уверен, что твое приложение само должно обрабатывать редирект на HTTPS, раскомментируй.
+// app.UseHttpsRedirection(); 
 
-app.UseAuthentication();
-app.UseAuthorization();
+app.UseRouting(); // Включаем маршрутизацию
 
-app.MapControllers();
-app.MapGet("/", () => {
-    Console.WriteLine("Root endpoint called");
-    return "StackOverStudy API is running";
-});
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    Console.WriteLine($"Pending migrations: {string.Join(", ", db.Database.GetPendingMigrations())}");
-}
+// CORS должен быть вызван ПОСЛЕ UseRouting и ПЕРЕД UseAuthentication/UseAuthorization и MapControllers.
+app.UseCors("AllowSpecificOrigins");
+
+app.UseAuthentication(); // Включаем аутентификацию (проверяет куки/токены)
+app.UseAuthorization();  // Включаем авторизацию (проверяет политики и [Authorize] атрибуты)
+
+app.MapControllers();    // Сопоставляем маршруты с атрибутами в контроллерах
+
+// Простой эндпоинт для проверки, что API работает
+app.MapGet("/", () => TypedResults.Ok("StackOverStudy API is running!"));
+
 app.Run();
