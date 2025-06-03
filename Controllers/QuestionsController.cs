@@ -108,25 +108,47 @@ namespace StackOverStadyApi.Controllers
         }
 
         [HttpDelete("{questionId}")]
-        [Authorize(Policy = "RequireModeratorRole")]
+        [Authorize(Policy = "RequireModeratorRole")] // Это правильно
         public async Task<IActionResult> DeleteQuestion(int questionId)
         {
-            var question = await _context.Questions.FindAsync(questionId); // Проще найти по ID
+            // Вставь сюда отладочное логирование User.Claims, как показано выше, для проверки роли
+            Console.WriteLine($"--- User trying to delete question {questionId} ---");
+            if (User.Identity != null && User.Identity.IsAuthenticated)
+            {
+                foreach (var claim in User.Claims) { Console.WriteLine($"Claim: {claim.Type} = {claim.Value}"); }
+                Console.WriteLine($"Is User in Moderator role (check in controller)? {User.IsInRole(UserRole.Moderator.ToString())}");
+                Console.WriteLine($"Is User in Admin role (check in controller)? {User.IsInRole(UserRole.Admin.ToString())}");
+            }
+            else
+            {
+                Console.WriteLine("--- User is not authenticated for delete operation ---");
+            }
+
+
+            var question = await _context.Questions.FindAsync(questionId);
 
             if (question == null)
             {
                 return NotFound(new { message = "Вопрос не найден." });
             }
 
-            // EF Core должен удалить связанные Answers, если в ApplicationDbContext
-            // для связи Question -> Answers настроено OnDelete(DeleteBehavior.Cascade).
-            // У тебя это настроено:
-            // .OnDelete(DeleteBehavior.Cascade); // Удалять ответы при удалении вопроса
-            // То же самое касается комментариев и голосов, если они каскадно связаны с ответами/вопросом.
-
-            _context.Questions.Remove(question);
-            await _context.SaveChangesAsync();
-            return NoContent();
+            try // Добавим try-catch для отладки потенциальных проблем с удалением
+            {
+                _context.Questions.Remove(question);
+                await _context.SaveChangesAsync();
+                Console.WriteLine($"--- Question {questionId} deleted successfully by user {User.FindFirstValue(ClaimTypes.NameIdentifier)} ---");
+                return NoContent();
+            }
+            catch (DbUpdateException dbEx)
+            {
+                Console.WriteLine($"[DB ERROR DeleteQuestion ID: {questionId}]: {dbEx.ToString()}");
+                return StatusCode(500, new { message = "Ошибка базы данных при удалении вопроса." });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR DeleteQuestion ID: {questionId}]: {ex.ToString()}");
+                return StatusCode(500, new { message = "Внутренняя ошибка сервера при удалении вопроса." });
+            }
         }
 
         // GET /api/Questions - Получение списка вопросов
