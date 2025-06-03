@@ -70,11 +70,37 @@ namespace StackOverStadyApi.Controllers
                     using var transaction = await _context.Database.BeginTransactionAsync();
                     try
                     {
-                        // Перезагружаем данные внутри блока для корректной работы повторов
+                        // Загружаем сущность контента с отслеживанием состояния
+                        int? authorId = null;
+                        Question questionEntity = null;
+                        Answer answerEntity = null;
+
+                        if (questionId.HasValue)
+                        {
+                            questionEntity = await _context.Questions
+                                .FirstOrDefaultAsync(q => q.Id == questionId.Value);
+                            if (questionEntity == null) return NotFound("Вопрос не найден.");
+                            authorId = questionEntity.AuthorId;
+                        }
+                        else if (answerId.HasValue)
+                        {
+                            answerEntity = await _context.Answers
+                                .FirstOrDefaultAsync(a => a.Id == answerId.Value);
+                            if (answerEntity == null) return NotFound("Ответ не найден.");
+                            authorId = answerEntity.AuthorId;
+                        }
+                        else return BadRequest("Должен быть указан вопрос или ответ.");
+
+                        // Проверка на голосование за свой пост
                         Vote? existingVote = await _context.Votes
                             .FirstOrDefaultAsync(v => v.UserId == userId &&
                                                     v.QuestionId == questionId &&
                                                     v.AnswerId == answerId);
+
+                        if (existingVote == null && authorId == userId)
+                        {
+                            return BadRequest(new { message = "Вы не можете голосовать за свой собственный пост." });
+                        }
 
                         int ratingChange = 0;
                         string action = "voted";
@@ -96,30 +122,6 @@ namespace StackOverStadyApi.Controllers
                         }
                         else
                         {
-                            // Проверка на голосование за свой пост
-                            if (questionId.HasValue)
-                            {
-                                var question = await _context.Questions
-                                    .AsNoTracking()
-                                    .FirstOrDefaultAsync(q => q.Id == questionId.Value);
-
-                                if (question != null && question.AuthorId == userId)
-                                {
-                                    return BadRequest(new { message = "Вы не можете голосовать за свой собственный вопрос." });
-                                }
-                            }
-                            else if (answerId.HasValue)
-                            {
-                                var answer = await _context.Answers
-                                    .AsNoTracking()
-                                    .FirstOrDefaultAsync(a => a.Id == answerId.Value);
-
-                                if (answer != null && answer.AuthorId == userId)
-                                {
-                                    return BadRequest(new { message = "Вы не можете голосовать за свой собственный ответ." });
-                                }
-                            }
-
                             var newVote = new Vote
                             {
                                 UserId = userId,
@@ -133,56 +135,64 @@ namespace StackOverStadyApi.Controllers
                             action = "added vote";
                         }
 
-                        await _context.SaveChangesAsync();
-
                         if (ratingChange != 0)
                         {
-                            if (questionId.HasValue)
+                            // Обновляем рейтинг контента
+                            if (questionEntity != null)
                             {
-                                await _context.Database.ExecuteSqlInterpolatedAsync(
-                                    $"UPDATE \"Questions\" SET \"Rating\" = \"Rating\" + {ratingChange} WHERE \"Id\" = {questionId.Value}");
+                                questionEntity.Rating += ratingChange;
                             }
-                            else if (answerId.HasValue)
+                            else if (answerEntity != null)
                             {
-                                await _context.Database.ExecuteSqlInterpolatedAsync(
-                                    $"UPDATE \"Answers\" SET \"Rating\" = \"Rating\" + {ratingChange} WHERE \"Id\" = {answerId.Value}");
+                                answerEntity.Rating += ratingChange;
                             }
+
+                            // Обновляем рейтинг автора
+                            var author = await _context.Users.FindAsync(authorId);
+                            if (author == null)
+                            {
+                                await transaction.RollbackAsync();
+                                return NotFound("Автор не найден.");
+                            }
+                            author.Rating += ratingChange;
                         }
 
+                        await _context.SaveChangesAsync();
                         await transaction.CommitAsync();
 
-                        // Получаем обновленный рейтинг
+                        // Получаем обновленный рейтинг контента
                         int newRating = 0;
-                        if (questionId.HasValue)
+                        if (questionEntity != null)
                         {
-                            newRating = await _context.Questions
-                                .AsNoTracking()
-                                .Where(q => q.Id == questionId.Value)
-                                .Select(q => q.Rating)
-                                .FirstOrDefaultAsync();
+                            newRating = questionEntity.Rating;
                         }
-                        else if (answerId.HasValue)
+                        else if (answerEntity != null)
                         {
-                            newRating = await _context.Answers
-                                .AsNoTracking()
-                                .Where(a => a.Id == answerId.Value)
-                                .Select(a => a.Rating)
-                                .FirstOrDefaultAsync();
+                            newRating = answerEntity.Rating;
                         }
 
                         return Ok(new { action, newRating });
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
                         await transaction.RollbackAsync();
-                        throw;
+                        Console.WriteLine($"Error in ProcessVote: {ex}");
+                        return StatusCode(500, new
+                        {
+                            message = "Внутренняя ошибка сервера при обработке голоса",
+                            details = ex.Message
+                        });
                     }
                 });
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[CRITICAL ERROR VotesController.ProcessVote] User: {userId}, QID: {questionId}, AID: {answerId}, VoteType: {voteType}. Error: {ex}");
-                return StatusCode(500, new { message = "Внутренняя ошибка сервера при обработке голоса", details = ex.Message });
+                Console.WriteLine($"[CRITICAL ERROR] User: {userId}, QID: {questionId}, AID: {answerId}, VoteType: {voteType}. Error: {ex}");
+                return StatusCode(500, new
+                {
+                    message = "Внутренняя ошибка сервера при обработке голоса",
+                    details = ex.Message
+                });
             }
         }
     }
