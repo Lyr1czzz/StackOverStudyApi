@@ -58,128 +58,131 @@ namespace StackOverStadyApi.Controllers
             var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (!int.TryParse(userIdString, out var userId))
             {
-                // Эта ошибка вернет 401, а не 500, если проблема здесь.
                 return Unauthorized("Не удалось определить пользователя.");
             }
 
-            // --- ВОЗМОЖНАЯ ТОЧКА ОШИБКИ 1: Взаимодействие с БД для existingVote ---
-            Vote? existingVote = null; // Объявляем заранее
-            try
-            {
-                existingVote = await _context.Votes
-                    .FirstOrDefaultAsync(v => v.UserId == userId && v.QuestionId == questionId && v.AnswerId == answerId);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ERROR VotesController.ProcessVote] Error fetching existing vote: {ex.ToString()}");
-                // Если здесь Npgsql.PostgresException, то проблема с подключением/запросом к таблице Votes
-                return StatusCode(500, "Ошибка при проверке существующего голоса.");
-            }
-
-            int ratingChange = 0;
-            string action = "voted";
-
-            // --- ВОЗМОЖНАЯ ТОЧКА ОШИБКИ 2: Начало транзакции ---
-            // Хотя маловероятно, если другие операции с БД работают
-            using var transaction = await _context.Database.BeginTransactionAsync();
+            var executionStrategy = _context.Database.CreateExecutionStrategy();
 
             try
             {
-                if (existingVote != null)
+                return await executionStrategy.ExecuteAsync<IActionResult>(async () =>
                 {
-                    if (existingVote.VoteType == voteType)
+                    using var transaction = await _context.Database.BeginTransactionAsync();
+                    try
                     {
-                        _context.Votes.Remove(existingVote);
-                        ratingChange = -(int)voteType;
-                        action = "removed vote";
-                    }
-                    else
-                    {
-                        ratingChange = (int)voteType - (int)existingVote.VoteType;
-                        existingVote.VoteType = voteType;
-                        existingVote.VotedAt = DateTime.UtcNow;
-                        // _context.Votes.Update(existingVote); // Update не обязателен для отслеживаемых сущностей
-                    }
-                }
-                else
-                {
-                    // --- ВОЗМОЖНАЯ ТОЧКА ОШИBКИ 3: Проверка, не голосует ли автор за свой пост ---
-                    // Если эта логика есть, и она падает, может быть 500.
-                    // Например, если questionId или answerId null, а мы пытаемся найти пост для проверки автора
-                    if (questionId.HasValue)
-                    {
-                        var question = await _context.Questions.FindAsync(questionId.Value);
-                        if (question != null && question.AuthorId == userId)
+                        // Перезагружаем данные внутри блока для корректной работы повторов
+                        Vote? existingVote = await _context.Votes
+                            .FirstOrDefaultAsync(v => v.UserId == userId &&
+                                                    v.QuestionId == questionId &&
+                                                    v.AnswerId == answerId);
+
+                        int ratingChange = 0;
+                        string action = "voted";
+
+                        if (existingVote != null)
                         {
-                            await transaction.RollbackAsync(); // Откатываем транзакцию перед выходом
-                            return BadRequest(new { message = "Вы не можете голосовать за свой собственный вопрос." });
+                            if (existingVote.VoteType == voteType)
+                            {
+                                _context.Votes.Remove(existingVote);
+                                ratingChange = -(int)voteType;
+                                action = "removed vote";
+                            }
+                            else
+                            {
+                                ratingChange = (int)voteType - (int)existingVote.VoteType;
+                                existingVote.VoteType = voteType;
+                                existingVote.VotedAt = DateTime.UtcNow;
+                            }
                         }
-                    }
-                    else if (answerId.HasValue)
-                    {
-                        var answer = await _context.Answers.FindAsync(answerId.Value);
-                        if (answer != null && answer.AuthorId == userId)
+                        else
                         {
-                            await transaction.RollbackAsync();
-                            return BadRequest(new { message = "Вы не можете голосовать за свой собственный ответ." });
+                            // Проверка на голосование за свой пост
+                            if (questionId.HasValue)
+                            {
+                                var question = await _context.Questions
+                                    .AsNoTracking()
+                                    .FirstOrDefaultAsync(q => q.Id == questionId.Value);
+
+                                if (question != null && question.AuthorId == userId)
+                                {
+                                    return BadRequest(new { message = "Вы не можете голосовать за свой собственный вопрос." });
+                                }
+                            }
+                            else if (answerId.HasValue)
+                            {
+                                var answer = await _context.Answers
+                                    .AsNoTracking()
+                                    .FirstOrDefaultAsync(a => a.Id == answerId.Value);
+
+                                if (answer != null && answer.AuthorId == userId)
+                                {
+                                    return BadRequest(new { message = "Вы не можете голосовать за свой собственный ответ." });
+                                }
+                            }
+
+                            var newVote = new Vote
+                            {
+                                UserId = userId,
+                                QuestionId = questionId,
+                                AnswerId = answerId,
+                                VoteType = voteType,
+                                VotedAt = DateTime.UtcNow
+                            };
+                            _context.Votes.Add(newVote);
+                            ratingChange = (int)voteType;
+                            action = "added vote";
                         }
+
+                        await _context.SaveChangesAsync();
+
+                        if (ratingChange != 0)
+                        {
+                            if (questionId.HasValue)
+                            {
+                                await _context.Database.ExecuteSqlInterpolatedAsync(
+                                    $"UPDATE \"Questions\" SET \"Rating\" = \"Rating\" + {ratingChange} WHERE \"Id\" = {questionId.Value}");
+                            }
+                            else if (answerId.HasValue)
+                            {
+                                await _context.Database.ExecuteSqlInterpolatedAsync(
+                                    $"UPDATE \"Answers\" SET \"Rating\" = \"Rating\" + {ratingChange} WHERE \"Id\" = {answerId.Value}");
+                            }
+                        }
+
+                        await transaction.CommitAsync();
+
+                        // Получаем обновленный рейтинг
+                        int newRating = 0;
+                        if (questionId.HasValue)
+                        {
+                            newRating = await _context.Questions
+                                .AsNoTracking()
+                                .Where(q => q.Id == questionId.Value)
+                                .Select(q => q.Rating)
+                                .FirstOrDefaultAsync();
+                        }
+                        else if (answerId.HasValue)
+                        {
+                            newRating = await _context.Answers
+                                .AsNoTracking()
+                                .Where(a => a.Id == answerId.Value)
+                                .Select(a => a.Rating)
+                                .FirstOrDefaultAsync();
+                        }
+
+                        return Ok(new { action, newRating });
                     }
-                    // --- КОНЕЦ ПРОВЕРКИ ---
-
-                    var newVote = new Vote
+                    catch (Exception)
                     {
-                        UserId = userId,
-                        QuestionId = questionId,
-                        AnswerId = answerId,
-                        VoteType = voteType,
-                        VotedAt = DateTime.UtcNow
-                    };
-                    _context.Votes.Add(newVote);
-                    ratingChange = (int)voteType;
-                    action = "added vote";
-                }
-
-                // --- ВОЗМОЖНАЯ ТОЧКА ОШИБКИ 4: SaveChanges для таблицы Votes ---
-                await _context.SaveChangesAsync(); // Сохраняем изменения голосов
-
-                // --- ВОЗМОЖНАЯ ТОЧКА ОШИБКИ 5: ExecuteSqlInterpolatedAsync ---
-                if (ratingChange != 0)
-                {
-                    if (questionId.HasValue)
-                    {
-                        // Убедись, что имя таблицы "Questions" и колонок "Rating", "Id" ТОЧНО совпадает с БД на Render
-                        await _context.Database.ExecuteSqlInterpolatedAsync(
-                            $"UPDATE \"Questions\" SET \"Rating\" = \"Rating\" + {ratingChange} WHERE \"Id\" = {questionId.Value}");
+                        await transaction.RollbackAsync();
+                        throw;
                     }
-                    else if (answerId.HasValue)
-                    {
-                        // Убедись, что имя таблицы "Answers" и колонок "Rating", "Id" ТОЧНО совпадает
-                        await _context.Database.ExecuteSqlInterpolatedAsync(
-                            $"UPDATE \"Answers\" SET \"Rating\" = \"Rating\" + {ratingChange} WHERE \"Id\" = {answerId.Value}");
-                    }
-                }
-
-                await transaction.CommitAsync();
-
-                int newRating = 0;
-                // --- ВОЗМОЖНАЯ ТОЧКА ОШИБКИ 6: Получение нового рейтинга ---
-                if (questionId.HasValue)
-                {
-                    newRating = await _context.Questions.Where(q => q.Id == questionId.Value).Select(q => q.Rating).FirstOrDefaultAsync();
-                }
-                else if (answerId.HasValue)
-                {
-                    newRating = await _context.Answers.Where(a => a.Id == answerId.Value).Select(a => a.Rating).FirstOrDefaultAsync();
-                }
-
-                return Ok(new { action, newRating });
+                });
             }
             catch (Exception ex)
             {
-                await transaction.RollbackAsync();
-                // Это должно логироваться на Render!
-                Console.WriteLine($"[CRITICAL ERROR VotesController.ProcessVote] User: {userId}, QID: {questionId}, AID: {answerId}, VoteType: {voteType}. Error: {ex.ToString()}");
-                return StatusCode(500, new { message = ex.Message, details = ex.Message }); // Возвращаем детали ошибки для отладки
+                Console.WriteLine($"[CRITICAL ERROR VotesController.ProcessVote] User: {userId}, QID: {questionId}, AID: {answerId}, VoteType: {voteType}. Error: {ex}");
+                return StatusCode(500, new { message = "Внутренняя ошибка сервера при обработке голоса", details = ex.Message });
             }
         }
     }
