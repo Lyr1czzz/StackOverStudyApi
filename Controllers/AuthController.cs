@@ -314,7 +314,7 @@ namespace StackOverStadyApi.Controllers
                 issuer: jwtIssuer,
                 audience: jwtAudience,
                 claims: claims,
-                expires: DateTime.UtcNow.AddMinutes(30), // Короткое время жизни Access Token
+                expires: DateTime.UtcNow.AddMinutes(10000), // Короткое время жизни Access Token
                 signingCredentials: credentials);
 
             var accessTokenString = new JwtSecurityTokenHandler().WriteToken(accessToken);
