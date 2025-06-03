@@ -179,7 +179,7 @@ namespace StackOverStadyApi.Controllers
                 await transaction.RollbackAsync();
                 // Это должно логироваться на Render!
                 Console.WriteLine($"[CRITICAL ERROR VotesController.ProcessVote] User: {userId}, QID: {questionId}, AID: {answerId}, VoteType: {voteType}. Error: {ex.ToString()}");
-                return StatusCode(500, new { message = "Внутренняя ошибка сервера при обработке голоса.", details = ex.Message }); // Возвращаем детали ошибки для отладки
+                return StatusCode(500, new { message = ex.Message, details = ex.Message }); // Возвращаем детали ошибки для отладки
             }
         }
     }
