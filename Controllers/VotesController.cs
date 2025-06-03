@@ -52,50 +52,80 @@ namespace StackOverStadyApi.Controllers
 
 
         // --- Приватный метод для обработки голоса ---
+        // Controllers/VotesController.cs
         private async Task<IActionResult> ProcessVote(int? questionId, int? answerId, VoteType voteType)
         {
             var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (!int.TryParse(userIdString, out var userId))
             {
+                // Эта ошибка вернет 401, а не 500, если проблема здесь.
                 return Unauthorized("Не удалось определить пользователя.");
             }
 
-            // Находим существующий голос пользователя за этот пост (если есть)
-            var existingVote = await _context.Votes
-                .FirstOrDefaultAsync(v => v.UserId == userId && v.QuestionId == questionId && v.AnswerId == answerId);
+            // --- ВОЗМОЖНАЯ ТОЧКА ОШИБКИ 1: Взаимодействие с БД для existingVote ---
+            Vote? existingVote = null; // Объявляем заранее
+            try
+            {
+                existingVote = await _context.Votes
+                    .FirstOrDefaultAsync(v => v.UserId == userId && v.QuestionId == questionId && v.AnswerId == answerId);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR VotesController.ProcessVote] Error fetching existing vote: {ex.ToString()}");
+                // Если здесь Npgsql.PostgresException, то проблема с подключением/запросом к таблице Votes
+                return StatusCode(500, "Ошибка при проверке существующего голоса.");
+            }
 
             int ratingChange = 0;
             string action = "voted";
 
-            using var transaction = await _context.Database.BeginTransactionAsync(); // Используем транзакцию
+            // --- ВОЗМОЖНАЯ ТОЧКА ОШИБКИ 2: Начало транзакции ---
+            // Хотя маловероятно, если другие операции с БД работают
+            using var transaction = await _context.Database.BeginTransactionAsync();
 
             try
             {
                 if (existingVote != null)
                 {
-                    // Голос уже существует
                     if (existingVote.VoteType == voteType)
                     {
-                        // Пользователь отменяет свой голос (нажал ту же кнопку)
                         _context.Votes.Remove(existingVote);
-                        ratingChange = -(int)voteType; // Изменение рейтинга противоположно типу голоса
+                        ratingChange = -(int)voteType;
                         action = "removed vote";
-                        Console.WriteLine($"[Vote] User {userId} removed {voteType} vote for Q:{questionId}/A:{answerId}");
                     }
                     else
                     {
-                        // Пользователь меняет свой голос (нажал другую кнопку)
-                        ratingChange = (int)voteType - (int)existingVote.VoteType; // Разница между новым и старым
-                        existingVote.VoteType = voteType; // Обновляем тип голоса
+                        ratingChange = (int)voteType - (int)existingVote.VoteType;
+                        existingVote.VoteType = voteType;
                         existingVote.VotedAt = DateTime.UtcNow;
-                        _context.Votes.Update(existingVote);
-                        action = "changed vote";
-                        Console.WriteLine($"[Vote] User {userId} changed vote to {voteType} for Q:{questionId}/A:{answerId}");
+                        // _context.Votes.Update(existingVote); // Update не обязателен для отслеживаемых сущностей
                     }
                 }
                 else
                 {
-                    // Новый голос
+                    // --- ВОЗМОЖНАЯ ТОЧКА ОШИBКИ 3: Проверка, не голосует ли автор за свой пост ---
+                    // Если эта логика есть, и она падает, может быть 500.
+                    // Например, если questionId или answerId null, а мы пытаемся найти пост для проверки автора
+                    if (questionId.HasValue)
+                    {
+                        var question = await _context.Questions.FindAsync(questionId.Value);
+                        if (question != null && question.AuthorId == userId)
+                        {
+                            await transaction.RollbackAsync(); // Откатываем транзакцию перед выходом
+                            return BadRequest(new { message = "Вы не можете голосовать за свой собственный вопрос." });
+                        }
+                    }
+                    else if (answerId.HasValue)
+                    {
+                        var answer = await _context.Answers.FindAsync(answerId.Value);
+                        if (answer != null && answer.AuthorId == userId)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { message = "Вы не можете голосовать за свой собственный ответ." });
+                        }
+                    }
+                    // --- КОНЕЦ ПРОВЕРКИ ---
+
                     var newVote = new Vote
                     {
                         UserId = userId,
@@ -105,35 +135,34 @@ namespace StackOverStadyApi.Controllers
                         VotedAt = DateTime.UtcNow
                     };
                     _context.Votes.Add(newVote);
-                    ratingChange = (int)voteType; // Изменение рейтинга равно типу голоса
+                    ratingChange = (int)voteType;
                     action = "added vote";
-                    Console.WriteLine($"[Vote] User {userId} added {voteType} vote for Q:{questionId}/A:{answerId}");
                 }
 
-                // Обновляем рейтинг поста
+                // --- ВОЗМОЖНАЯ ТОЧКА ОШИБКИ 4: SaveChanges для таблицы Votes ---
+                await _context.SaveChangesAsync(); // Сохраняем изменения голосов
+
+                // --- ВОЗМОЖНАЯ ТОЧКА ОШИБКИ 5: ExecuteSqlInterpolatedAsync ---
                 if (ratingChange != 0)
                 {
                     if (questionId.HasValue)
                     {
-                        // Обновляем рейтинг вопроса атомарно
+                        // Убедись, что имя таблицы "Questions" и колонок "Rating", "Id" ТОЧНО совпадает с БД на Render
                         await _context.Database.ExecuteSqlInterpolatedAsync(
-                            $"UPDATE \"Questions\" SET \"Rating\" = \"Rating\" + {ratingChange} WHERE \"Id\" = {questionId}");
-                        Console.WriteLine($"[Vote] Question {questionId} rating changed by {ratingChange}");
+                            $"UPDATE \"Questions\" SET \"Rating\" = \"Rating\" + {ratingChange} WHERE \"Id\" = {questionId.Value}");
                     }
                     else if (answerId.HasValue)
                     {
-                        // Обновляем рейтинг ответа атомарно
+                        // Убедись, что имя таблицы "Answers" и колонок "Rating", "Id" ТОЧНО совпадает
                         await _context.Database.ExecuteSqlInterpolatedAsync(
-                            $"UPDATE \"Answers\" SET \"Rating\" = \"Rating\" + {ratingChange} WHERE \"Id\" = {answerId}");
-                        Console.WriteLine($"[Vote] Answer {answerId} rating changed by {ratingChange}");
+                            $"UPDATE \"Answers\" SET \"Rating\" = \"Rating\" + {ratingChange} WHERE \"Id\" = {answerId.Value}");
                     }
                 }
 
-                await _context.SaveChangesAsync(); // Сохраняем изменения голосов
-                await transaction.CommitAsync(); // Фиксируем транзакцию
+                await transaction.CommitAsync();
 
-                // Получаем новый рейтинг для возврата клиенту
                 int newRating = 0;
+                // --- ВОЗМОЖНАЯ ТОЧКА ОШИБКИ 6: Получение нового рейтинга ---
                 if (questionId.HasValue)
                 {
                     newRating = await _context.Questions.Where(q => q.Id == questionId.Value).Select(q => q.Rating).FirstOrDefaultAsync();
@@ -143,13 +172,14 @@ namespace StackOverStadyApi.Controllers
                     newRating = await _context.Answers.Where(a => a.Id == answerId.Value).Select(a => a.Rating).FirstOrDefaultAsync();
                 }
 
-                return Ok(new { action, newRating }); // Возвращаем результат и новый рейтинг
+                return Ok(new { action, newRating });
             }
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                Console.WriteLine($"[ERROR Vote] Failed to process vote for Q:{questionId}/A:{answerId}. User: {userId}. Error: {ex.Message}");
-                return StatusCode(500, "Ошибка при обработке голоса.");
+                // Это должно логироваться на Render!
+                Console.WriteLine($"[CRITICAL ERROR VotesController.ProcessVote] User: {userId}, QID: {questionId}, AID: {answerId}, VoteType: {voteType}. Error: {ex.ToString()}");
+                return StatusCode(500, new { message = "Внутренняя ошибка сервера при обработке голоса.", details = ex.Message }); // Возвращаем детали ошибки для отладки
             }
         }
     }
