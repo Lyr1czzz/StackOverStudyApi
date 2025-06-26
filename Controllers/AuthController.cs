@@ -169,7 +169,7 @@ namespace StackOverStadyApi.Controllers
 
                 Response.Cookies.Append("jwt", tokens.AccessToken, new CookieOptions(cookieOptionsBase)
                 {
-                    Expires = DateTimeOffset.UtcNow.AddMinutes(30), // Время жизни Access Token
+                    Expires = DateTimeOffset.UtcNow.AddMinutes(30000), // Время жизни Access Token
                 });
                 Console.WriteLine("[DEBUG GoogleResponse] 'jwt' cookie appended.");
 
@@ -314,7 +314,7 @@ namespace StackOverStadyApi.Controllers
                 issuer: jwtIssuer,
                 audience: jwtAudience,
                 claims: claims,
-                expires: DateTime.UtcNow.AddMinutes(10000), // Короткое время жизни Access Token
+                expires: DateTime.UtcNow.AddMinutes(30000), // Короткое время жизни Access Token
                 signingCredentials: credentials);
 
             var accessTokenString = new JwtSecurityTokenHandler().WriteToken(accessToken);
